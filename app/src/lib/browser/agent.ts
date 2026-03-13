@@ -187,10 +187,21 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
       }
 
       try {
-        // Observe available actions
-        const observations = await stagehand.observe(
-          `I am trying to: "${plan.missionDescription}". What interactive elements (buttons, links, form fields, navigation items) can I see and click on this page? List ALL clickable elements, not just ones related to the mission.`
-        );
+        // Try observe first, but fall back to direct act() if observe fails
+        // (e.g., Gemini truncates JSON on pages with many elements)
+        let observations: Awaited<ReturnType<typeof stagehand.observe>> | null = null;
+        try {
+          observations = await stagehand.observe(
+            `My goal: "${plan.missionDescription}". List the top 10 most relevant interactive elements (buttons, links, form fields) I should click or interact with to make progress toward my goal. Prioritize: sign up/login buttons, main CTAs, navigation items related to the task.`
+          );
+        } catch (observeError) {
+          // Observe failed (likely JSON parse error from truncated response)
+          trace.log({
+            action: "observe_error",
+            result: "observe failed, using direct act",
+            note: observeError instanceof Error ? observeError.message.slice(0, 200) : "unknown error",
+          });
+        }
 
         if (observations && observations.length > 0) {
           // We found something — pick the best action
@@ -230,6 +241,37 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
             agentNotes.push(
               `Step ${step + 1}: Action failed - ${actResult.message}`
             );
+          }
+        } else if (observations === null) {
+          // Observe threw an error — try direct act() with a goal-oriented instruction
+          const currentStep = plan.steps[Math.min(step, plan.steps.length - 1)] || plan.missionDescription;
+          const directAction = `Based on what you see on this page, do the next logical step toward: ${currentStep}`;
+
+          trace.log({
+            action: "direct_act",
+            target: directAction,
+            note: "Bypassing observe, using direct act",
+          });
+
+          try {
+            const actResult = await stagehand.act(directAction);
+            trace.log({
+              action: "act",
+              target: directAction,
+              result: actResult.success ? "success" : "failed",
+              note: actResult.message || undefined,
+            });
+
+            if (actResult.success) {
+              consecutiveFailures = 0;
+              hasActedSuccessfully = true;
+              fallbackIndex = 0;
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            } else {
+              consecutiveFailures++;
+            }
+          } catch {
+            consecutiveFailures++;
           }
         } else {
           // Observe returned nothing — try fallback direct actions
@@ -396,17 +438,20 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
       }
     }
 
-    // Final extraction to understand end state
+    // Final extraction to understand end state (with timeout in case CDP is dead)
     try {
-      const finalState = await stagehand.extract(
-        `Describe the current page state and what has been accomplished. Mission was: "${plan.missionDescription}". What page are we on? What content is visible?`,
-        z.object({
-          pageDescription: z.string(),
-          currentUrl: z.string().optional(),
-          accomplishments: z.string(),
-          remainingTasks: z.string(),
-        })
-      );
+      const finalState = await Promise.race([
+        stagehand.extract(
+          `Describe the current page state and what has been accomplished. Mission was: "${plan.missionDescription}". What page are we on? What content is visible?`,
+          z.object({
+            pageDescription: z.string(),
+            currentUrl: z.string().optional(),
+            accomplishments: z.string(),
+            remainingTasks: z.string(),
+          })
+        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("extraction timeout")), 10000)),
+      ]);
       agentNotes.push(`Final state: ${finalState.pageDescription}`);
       agentNotes.push(`Accomplished: ${finalState.accomplishments}`);
       if (finalState.currentUrl) {
@@ -431,7 +476,11 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
   } finally {
     if (stagehand) {
       try {
-        await stagehand.close();
+        // Timeout close() to prevent hanging when CDP connection is already dead
+        await Promise.race([
+          stagehand.close(),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
       } catch {
         // ignore close errors
       }
