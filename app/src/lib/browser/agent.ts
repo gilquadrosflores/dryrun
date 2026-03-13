@@ -20,6 +20,7 @@ interface PersonaConfig {
 interface PlanConfig {
   missionDescription: string;
   entryPoint: string;
+  productUrl: string;
   teacherState: string;
   steps: string[];
 }
@@ -81,7 +82,7 @@ export async function runBrowserAgent(
       apiKey: process.env.BROWSERBASE_API_KEY!,
       projectId: process.env.BROWSERBASE_PROJECT_ID!,
       model: {
-        modelName: "gemini-2.0-flash",
+        modelName: "google/gemini-2.0-flash",
         apiKey: process.env.GEMINI_API_KEY!,
       },
       systemPrompt: `You are ${persona.name}. You are not a software tester. You are a real person trying to get a task done during a busy week.
@@ -108,8 +109,8 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
     // Navigate to the entry point (ensure it's a valid URL)
     let startUrl = plan.entryPoint;
     if (!startUrl.startsWith("http://") && !startUrl.startsWith("https://")) {
-      // Fallback: treat as relative or keyword, use a sensible default
-      startUrl = `https://${startUrl}`;
+      // Not a URL — use product URL as fallback
+      startUrl = plan.productUrl;
     }
     trace.log({
       action: "navigate",

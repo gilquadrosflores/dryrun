@@ -8,6 +8,7 @@ import {
   missions,
   scores,
   reports,
+  products,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
@@ -177,6 +178,13 @@ async function executeSession(sessionId: string) {
 
   if (!mission) throw new Error("Mission not found");
 
+  // Look up the product URL for fallback navigation
+  const run = db.select().from(runs).where(eq(runs.id, session.runId)).get();
+  const product = run
+    ? db.select().from(products).where(eq(products.id, run.productId)).get()
+    : null;
+  const productUrl = product?.url || mission.entryPoint;
+
   const behavioralFields = JSON.parse(persona.behavioralFields);
 
   // Run the browser agent
@@ -196,6 +204,7 @@ async function executeSession(sessionId: string) {
     {
       missionDescription: mission.description,
       entryPoint: mission.entryPoint,
+      productUrl,
       teacherState: plan.teacherState,
       steps: JSON.parse(plan.steps),
     },
