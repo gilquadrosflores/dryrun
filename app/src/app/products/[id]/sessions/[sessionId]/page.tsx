@@ -1,0 +1,581 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import Link from "next/link";
+
+interface SessionData {
+  session: {
+    id: string;
+    status: string;
+    goalAchieved: string | null;
+    abandonmentPoint: string | null;
+    durationSeconds: number | null;
+    trace: string | null;
+    screenshots: string | null;
+    agentNotes: string | null;
+  };
+  score: {
+    taskCompletion: string;
+    timeToFirstActionSeconds: number | null;
+    deadEndCount: number;
+    recoveryCount: number;
+    helpSeekingEvents: number;
+    confidenceDrops: number;
+    frictionEvents: string | null;
+    aiReview: string | null;
+  } | null;
+  report: {
+    content: string;
+  } | null;
+  persona: {
+    name: string;
+    role: string;
+    behavioralFields: string;
+  } | null;
+  mission: {
+    description: string;
+    entryPoint: string;
+  } | null;
+  plan: {
+    teacherState: string;
+  } | null;
+}
+
+interface TraceEntry {
+  timestamp: number;
+  action: string;
+  target?: string;
+  result?: string;
+  note?: string;
+}
+
+const ACTION_COLORS: Record<string, string> = {
+  navigate: "text-blue-400 border-blue-800 bg-blue-950/30",
+  page_loaded: "text-blue-400 border-blue-800 bg-blue-950/30",
+  observe: "text-purple-400 border-purple-800 bg-purple-950/30",
+  plan: "text-cyan-400 border-cyan-800 bg-cyan-950/30",
+  act: "text-green-400 border-green-800 bg-green-950/30",
+  error: "text-red-400 border-red-800 bg-red-950/30",
+  fatal_error: "text-red-400 border-red-800 bg-red-950/30",
+  abandon: "text-orange-400 border-orange-800 bg-orange-950/30",
+  complete: "text-emerald-400 border-emerald-800 bg-emerald-950/30",
+  timeout: "text-yellow-400 border-yellow-800 bg-yellow-950/30",
+  progress_check: "text-indigo-400 border-indigo-800 bg-indigo-950/30",
+  screenshot: "text-zinc-400 border-zinc-700 bg-zinc-900/30",
+};
+
+export default function SessionDetailPage() {
+  const params = useParams();
+  const productId = params.id as string;
+  const sessionId = params.sessionId as string;
+
+  const [data, setData] = useState<SessionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [replayIndex, setReplayIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/sessions/${sessionId}`)
+      .then((res) => res.json())
+      .then(setData)
+      .finally(() => setLoading(false));
+  }, [sessionId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-zinc-400">
+        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        Loading session...
+      </div>
+    );
+  }
+  if (!data) return <div className="text-red-400">Session not found</div>;
+
+  const { session, score, report, persona, mission, plan } = data;
+  const trace: TraceEntry[] = session.trace ? JSON.parse(session.trace) : [];
+  const screenshots: string[] = session.screenshots
+    ? JSON.parse(session.screenshots)
+    : [];
+  const agentNotes: string[] = session.agentNotes
+    ? JSON.parse(session.agentNotes)
+    : [];
+  const frictionEvents = score?.frictionEvents
+    ? JSON.parse(score.frictionEvents)
+    : [];
+
+  const toggleRow = (i: number) => {
+    const next = new Set(expandedRows);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    setExpandedRows(next);
+  };
+
+  const getTimeDelta = (i: number): string => {
+    if (i === 0 || !trace[i - 1]) return "-";
+    const delta = trace[i].timestamp - trace[i - 1].timestamp;
+    if (delta < 1000) return `${delta}ms`;
+    return `${(delta / 1000).toFixed(1)}s`;
+  };
+
+  return (
+    <div>
+      <div className="mb-8">
+        <Link
+          href={`/products/${productId}`}
+          className="text-sm text-zinc-500 hover:text-zinc-300 mb-2 block"
+        >
+          &larr; Back to product
+        </Link>
+        <div className="flex items-center gap-3">
+          <h1 className="text-3xl font-bold tracking-tight">
+            Session {session.id.slice(0, 8)}
+          </h1>
+          <Badge
+            variant="outline"
+            className={
+              session.status === "complete"
+                ? "text-green-400 border-green-800"
+                : session.status === "abandoned"
+                  ? "text-orange-400 border-orange-800"
+                  : session.status === "failed"
+                    ? "text-red-400 border-red-800"
+                    : "text-yellow-400 border-yellow-800"
+            }
+          >
+            {session.status}
+          </Badge>
+        </div>
+        {persona && (
+          <p className="text-zinc-400 mt-1">
+            {persona.name} ({persona.role})
+            {mission && <> &middot; {mission.description}</>}
+          </p>
+        )}
+        {plan && (
+          <p className="text-zinc-500 text-sm mt-1 italic">
+            &ldquo;{plan.teacherState}&rdquo;
+          </p>
+        )}
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-4 pb-4">
+            <p className="text-xs text-zinc-500 mb-1">Goal</p>
+            <p className={`text-xl font-bold capitalize ${
+              session.goalAchieved === "yes" ? "text-green-400" :
+              session.goalAchieved === "partial" ? "text-yellow-400" :
+              "text-red-400"
+            }`}>
+              {session.goalAchieved || "N/A"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-4 pb-4">
+            <p className="text-xs text-zinc-500 mb-1">Duration</p>
+            <p className="text-xl font-bold">
+              {session.durationSeconds
+                ? session.durationSeconds >= 60
+                  ? `${Math.floor(session.durationSeconds / 60)}m ${session.durationSeconds % 60}s`
+                  : `${session.durationSeconds}s`
+                : "N/A"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-4 pb-4">
+            <p className="text-xs text-zinc-500 mb-1">Steps</p>
+            <p className="text-xl font-bold">{trace.length}</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-4 pb-4">
+            <p className="text-xs text-zinc-500 mb-1">Dead Ends</p>
+            <p className="text-xl font-bold text-orange-400">
+              {score?.deadEndCount ?? "N/A"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card className="bg-zinc-900 border-zinc-800">
+          <CardContent className="pt-4 pb-4">
+            <p className="text-xs text-zinc-500 mb-1">Recoveries</p>
+            <p className="text-xl font-bold text-blue-400">
+              {score?.recoveryCount ?? "N/A"}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Abandonment point callout */}
+      {session.abandonmentPoint && (
+        <Card className="bg-orange-950/20 border-orange-900 mb-6">
+          <CardContent className="pt-4 pb-4 flex items-start gap-3">
+            <span className="text-orange-400 text-lg">&#x26A0;</span>
+            <div>
+              <p className="text-sm font-medium text-orange-300">Abandonment Point</p>
+              <p className="text-sm text-orange-400/80">{session.abandonmentPoint}</p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Tabs defaultValue={report ? "report" : "trace"} className="space-y-4">
+        <TabsList className="bg-zinc-900 border border-zinc-800">
+          <TabsTrigger value="report">Report</TabsTrigger>
+          <TabsTrigger value="trace">Trace ({trace.length})</TabsTrigger>
+          <TabsTrigger value="screenshots">
+            Screenshots ({screenshots.length})
+          </TabsTrigger>
+          <TabsTrigger value="scores">Scores</TabsTrigger>
+          {agentNotes.length > 0 && (
+            <TabsTrigger value="notes">Notes ({agentNotes.length})</TabsTrigger>
+          )}
+        </TabsList>
+
+        {/* Report Tab */}
+        <TabsContent value="report">
+          {report ? (
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="pt-6">
+                <div className="prose prose-invert prose-sm max-w-none">
+                  <div dangerouslySetInnerHTML={{ __html: markdownToHtml(report.content) }} />
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="py-12 text-center text-zinc-500">
+                {session.status === "running" || session.status === "pending"
+                  ? "Report will be generated when the session completes."
+                  : "No report generated for this session."}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* Trace Tab — improved with colors, timeline, and expand */}
+        <TabsContent value="trace">
+          <Card className="bg-zinc-900 border-zinc-800">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Action Trace</CardTitle>
+                <div className="flex gap-2">
+                  {replayIndex !== null ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setReplayIndex(Math.max(0, replayIndex - 1))}
+                        disabled={replayIndex === 0}
+                      >
+                        Prev
+                      </Button>
+                      <span className="text-xs text-zinc-400 flex items-center px-2">
+                        {replayIndex + 1} / {trace.length}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setReplayIndex(
+                            Math.min(trace.length - 1, replayIndex + 1)
+                          )
+                        }
+                        disabled={replayIndex === trace.length - 1}
+                      >
+                        Next
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setReplayIndex(null)}
+                      >
+                        Exit Replay
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setReplayIndex(0)}
+                      disabled={trace.length === 0}
+                    >
+                      Step Through
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1">
+                {trace.map((entry, i) => {
+                  const isHighlighted = replayIndex === i;
+                  const isVisible = replayIndex === null || i <= replayIndex;
+                  if (!isVisible) return null;
+
+                  const colorClass = ACTION_COLORS[entry.action] || "text-zinc-400 border-zinc-700";
+                  const isExpanded = expandedRows.has(i);
+                  const hasLongContent =
+                    (entry.target && entry.target.length > 60) ||
+                    (entry.note && entry.note.length > 60);
+
+                  return (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-3 px-3 py-2 rounded text-sm cursor-pointer transition-colors ${
+                        isHighlighted
+                          ? "bg-zinc-800 ring-1 ring-zinc-600"
+                          : "hover:bg-zinc-800/50"
+                      }`}
+                      onClick={() => hasLongContent && toggleRow(i)}
+                    >
+                      {/* Step number + time delta */}
+                      <div className="flex flex-col items-end w-16 flex-shrink-0">
+                        <span className="text-zinc-500 text-xs font-mono">{i + 1}</span>
+                        <span className="text-zinc-600 text-[10px]">{getTimeDelta(i)}</span>
+                      </div>
+
+                      {/* Timeline dot */}
+                      <div className="flex flex-col items-center pt-1">
+                        <div className={`w-2 h-2 rounded-full ${
+                          entry.action === "error" || entry.action === "fatal_error"
+                            ? "bg-red-500"
+                            : entry.action === "complete"
+                              ? "bg-emerald-500"
+                              : entry.action === "abandon"
+                                ? "bg-orange-500"
+                                : "bg-zinc-500"
+                        }`} />
+                        {i < trace.length - 1 && (
+                          <div className="w-px h-full bg-zinc-800 mt-1" />
+                        )}
+                      </div>
+
+                      {/* Content */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${colorClass}`}>
+                            {entry.action}
+                          </Badge>
+                          {entry.result && (
+                            <span className={`text-xs ${
+                              entry.result === "success"
+                                ? "text-green-500"
+                                : entry.result === "failed"
+                                  ? "text-red-500"
+                                  : "text-zinc-400"
+                            }`}>
+                              {entry.result}
+                            </span>
+                          )}
+                        </div>
+                        {entry.target && (
+                          <p className={`text-zinc-300 text-xs mt-0.5 ${isExpanded ? "" : "truncate"}`}>
+                            {entry.target}
+                          </p>
+                        )}
+                        {entry.note && (
+                          <p className={`text-zinc-500 text-xs mt-0.5 italic ${isExpanded ? "" : "truncate"}`}>
+                            {entry.note}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Screenshots Tab */}
+        <TabsContent value="screenshots">
+          {screenshots.length === 0 ? (
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="py-12 text-center text-zinc-500">
+                No screenshots captured. Screenshots are available when using Browserbase sessions.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {screenshots.map((src, i) => (
+                <Card key={i} className="bg-zinc-900 border-zinc-800">
+                  <CardContent className="pt-4">
+                    <img
+                      src={src}
+                      alt={`Screenshot ${i + 1}`}
+                      className="w-full rounded border border-zinc-700"
+                    />
+                    <p className="text-xs text-zinc-500 mt-2">
+                      {src.split("/").pop()}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Scores Tab */}
+        <TabsContent value="scores">
+          {score ? (
+            <div className="space-y-4">
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardHeader>
+                  <CardTitle className="text-base">Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+                    <MetricBox label="Task Completion" value={score.taskCompletion} capitalize />
+                    <MetricBox
+                      label="Time to First Action"
+                      value={score.timeToFirstActionSeconds != null ? `${score.timeToFirstActionSeconds}s` : "N/A"}
+                    />
+                    <MetricBox label="Dead Ends" value={score.deadEndCount} color="orange" />
+                    <MetricBox label="Recoveries" value={score.recoveryCount} color="blue" />
+                    <MetricBox label="Help Seeking" value={score.helpSeekingEvents} />
+                    <MetricBox label="Confidence Drops" value={score.confidenceDrops} color="red" />
+                  </div>
+                </CardContent>
+              </Card>
+
+              {frictionEvents.length > 0 && (
+                <Card className="bg-zinc-900 border-zinc-800">
+                  <CardHeader>
+                    <CardTitle className="text-base">Friction Events ({frictionEvents.length})</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-3">
+                      {frictionEvents
+                        .sort((a: { severity: number }, b: { severity: number }) => b.severity - a.severity)
+                        .map((event: { step: number; severity: number; category: string; description: string }, i: number) => (
+                          <div key={i} className="flex items-start gap-3 p-3 rounded bg-zinc-800/50">
+                            <Badge
+                              variant="outline"
+                              className={`text-xs flex-shrink-0 ${
+                                event.severity >= 4
+                                  ? "text-red-400 border-red-800"
+                                  : event.severity >= 3
+                                    ? "text-orange-400 border-orange-800"
+                                    : "text-yellow-400 border-yellow-800"
+                              }`}
+                            >
+                              {event.severity}/5
+                            </Badge>
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs text-zinc-500">Step {event.step}</span>
+                                <Badge variant="outline" className="text-[10px] text-zinc-400 border-zinc-700">
+                                  {event.category}
+                                </Badge>
+                              </div>
+                              <p className="text-sm text-zinc-300">{event.description}</p>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {score.aiReview && (
+                <Card className="bg-zinc-900 border-zinc-800">
+                  <CardHeader>
+                    <CardTitle className="text-base">AI Review</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="prose prose-invert prose-sm max-w-none">
+                      <div dangerouslySetInnerHTML={{ __html: markdownToHtml(score.aiReview) }} />
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          ) : (
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="py-12 text-center text-zinc-500">
+                No scores yet
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* Agent Notes Tab */}
+        {agentNotes.length > 0 && (
+          <TabsContent value="notes">
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="pt-6">
+                <div className="space-y-2">
+                  {agentNotes.map((note, i) => (
+                    <div key={i} className="text-sm text-zinc-400 p-2 rounded bg-zinc-800/50">
+                      {note}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
+    </div>
+  );
+}
+
+function MetricBox({
+  label,
+  value,
+  capitalize: cap,
+  color,
+}: {
+  label: string;
+  value: string | number;
+  capitalize?: boolean;
+  color?: "red" | "orange" | "blue" | "green";
+}) {
+  const colorClass = color
+    ? {
+        red: "text-red-400",
+        orange: "text-orange-400",
+        blue: "text-blue-400",
+        green: "text-green-400",
+      }[color]
+    : "text-zinc-100";
+
+  return (
+    <div>
+      <p className="text-xs text-zinc-500 mb-1">{label}</p>
+      <p className={`text-lg font-semibold ${colorClass} ${cap ? "capitalize" : ""}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function markdownToHtml(md: string): string {
+  return md
+    .replace(/^### (.*$)/gm, '<h3 class="text-lg font-semibold mt-4 mb-2 text-zinc-100">$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2 class="text-xl font-bold mt-6 mb-3 text-zinc-100">$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1 class="text-2xl font-bold mt-8 mb-4 text-zinc-100">$1</h1>')
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, '<code class="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300 text-xs">$1</code>')
+    .replace(/^- (.*$)/gm, '<li class="ml-4 text-zinc-300">&#x2022; $1</li>')
+    .replace(/^(\d+)\. (.*$)/gm, '<li class="ml-4 text-zinc-300">$1. $2</li>')
+    .replace(/\n\n/g, '<br class="my-2">')
+    .replace(/\n/g, "<br>");
+}
