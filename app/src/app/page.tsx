@@ -27,18 +27,16 @@ interface ProductStats {
   lastRunStatus: string | null;
 }
 
-const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  completed: "default",
-  running: "secondary",
-  pending: "outline",
-  failed: "destructive",
-};
-
 function StatusBadge({ status }: { status: string | null }) {
   if (!status) return null;
-  const variant = STATUS_VARIANT[status] ?? "outline";
+  const styles: Record<string, string> = {
+    completed: "bg-[#4ADE80]/10 text-[#4ADE80] border-[#4ADE80]/30",
+    running: "bg-[#E8FF00]/10 text-[#E8FF00] border-[#E8FF00]/30",
+    pending: "border-[#333] text-[#555]",
+    failed: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/30",
+  };
   return (
-    <Badge variant={variant} className="text-xs capitalize">
+    <Badge variant="outline" className={`text-xs capitalize ${styles[status] || ""}`}>
       {status}
     </Badge>
   );
@@ -62,7 +60,6 @@ export default function Home() {
       .then((res) => res.json())
       .then((data: Product[]) => {
         setProducts(data);
-        // Fetch stats for each product in parallel
         data.forEach((product) => {
           fetch(`/api/products/${product.id}/stats`)
             .then((res) => res.json())
@@ -77,14 +74,14 @@ export default function Home() {
   return (
     <div>
       {/* Hero section */}
-      <div className="mb-12 text-center py-10 border-b border-zinc-800">
-        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">
-          Dryrun
+      <div className="mb-16 text-center py-16 border-b border-dashed border-[#333]">
+        <h1 className="text-6xl font-black tracking-tighter sm:text-7xl">
+          DRYRUN
         </h1>
-        <p className="mt-3 text-lg text-zinc-400 max-w-2xl mx-auto">
+        <p className="mt-4 text-lg text-[#E8FF00] font-semibold">
           AI agents that test your product like real users
         </p>
-        <p className="mt-2 text-sm text-zinc-500 max-w-xl mx-auto">
+        <p className="mt-2 text-sm text-[#555] max-w-xl mx-auto">
           Generate synthetic personas, plan realistic test missions, and uncover UX friction before your users do.
         </p>
       </div>
@@ -92,8 +89,8 @@ export default function Home() {
       {/* Products header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Products</h2>
-          <p className="text-zinc-400 mt-1">
+          <h2 className="text-3xl font-bold tracking-tight">Products</h2>
+          <p className="text-[#555] mt-1 text-sm">
             Add a product to start synthetic user testing
           </p>
         </div>
@@ -105,20 +102,19 @@ export default function Home() {
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="bg-zinc-900 border-zinc-800 animate-pulse">
+            <Card key={i} className="animate-pulse">
               <CardHeader>
-                <div className="h-5 bg-zinc-800 rounded w-1/2" />
-                <div className="h-4 bg-zinc-800 rounded w-3/4 mt-2" />
+                <div className="h-5 bg-[#1a1a1a] rounded w-1/2" />
+                <div className="h-4 bg-[#1a1a1a] rounded w-3/4 mt-2" />
               </CardHeader>
             </Card>
           ))}
         </div>
       ) : products.length === 0 ? (
-        /* Quick Start empty state */
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card>
           <CardHeader className="text-center pb-2">
-            <CardTitle className="text-xl">Quick Start</CardTitle>
-            <CardDescription className="text-zinc-400">
+            <CardTitle className="text-xl font-bold">Quick Start</CardTitle>
+            <CardDescription>
               Get from zero to friction reports in five steps
             </CardDescription>
           </CardHeader>
@@ -126,11 +122,11 @@ export default function Home() {
             <ol className="grid grid-cols-1 sm:grid-cols-5 gap-4">
               {WORKFLOW_STEPS.map((step) => (
                 <li key={step.number} className="flex flex-col items-center text-center gap-2">
-                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-800 text-sm font-semibold text-zinc-300">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#E8FF00] text-[#0a0a0a] text-sm font-bold">
                     {step.number}
                   </span>
-                  <span className="text-sm font-medium">{step.title}</span>
-                  <span className="text-xs text-zinc-500">{step.description}</span>
+                  <span className="text-sm font-semibold">{step.title}</span>
+                  <span className="text-xs text-[#555]">{step.description}</span>
                 </li>
               ))}
             </ol>
@@ -150,19 +146,19 @@ export default function Home() {
             const s = stats[product.id];
             return (
               <Link key={product.id} href={`/products/${product.id}`}>
-                <Card className="bg-zinc-900 border-zinc-800 hover:border-zinc-700 transition-colors cursor-pointer">
+                <Card className="hover:border-[#E8FF00]/50 transition-colors cursor-pointer">
                   <CardHeader>
                     <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg">{product.name}</CardTitle>
+                      <CardTitle className="text-lg font-bold">{product.name}</CardTitle>
                       {s && <StatusBadge status={s.lastRunStatus} />}
                     </div>
-                    <CardDescription className="text-zinc-400">
+                    <CardDescription>
                       {product.url}
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {summary && (
-                      <p className="text-sm text-zinc-500 line-clamp-2">
+                      <p className="text-sm text-[#555] line-clamp-2">
                         {summary.purpose}
                       </p>
                     )}
@@ -172,13 +168,13 @@ export default function Home() {
                       </Badge>
                       {s && (
                         <>
-                          <Badge variant="secondary" className="text-xs">
+                          <Badge variant="secondary" className="text-xs font-mono">
                             {s.personaCount} {s.personaCount === 1 ? "persona" : "personas"}
                           </Badge>
-                          <Badge variant="secondary" className="text-xs">
+                          <Badge variant="secondary" className="text-xs font-mono">
                             {s.planCount} {s.planCount === 1 ? "plan" : "plans"}
                           </Badge>
-                          <Badge variant="secondary" className="text-xs">
+                          <Badge variant="secondary" className="text-xs font-mono">
                             {s.runCount} {s.runCount === 1 ? "run" : "runs"}
                           </Badge>
                         </>

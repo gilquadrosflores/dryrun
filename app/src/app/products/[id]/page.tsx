@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -98,7 +97,6 @@ export default function ProductPage() {
     fetchData();
   }, [fetchData]);
 
-  // Poll for running sessions
   useEffect(() => {
     const activeRun = runs.find((r) => r.status === "running");
     if (!activeRun) {
@@ -111,7 +109,6 @@ export default function ProductPage() {
       const data = await res.json();
       setRunningSessions(data.sessions || []);
 
-      // Refresh all data if run completed
       if (data.run.status !== "running") {
         fetchData();
       }
@@ -277,11 +274,11 @@ export default function ProductPage() {
   };
 
   if (loading) {
-    return <div className="text-zinc-400">Loading...</div>;
+    return <div className="text-[#555]">Loading...</div>;
   }
 
   if (!product) {
-    return <div className="text-red-400">Product not found</div>;
+    return <div className="text-[#EF4444]">Product not found</div>;
   }
 
   const summary = product.crawlSummary
@@ -294,14 +291,14 @@ export default function ProductPage() {
       <div className="mb-8">
         <Link
           href="/"
-          className="text-sm text-zinc-500 hover:text-zinc-300 mb-2 block"
+          className="text-sm text-[#555] hover:text-[#E8FF00] mb-2 block transition-colors"
         >
           &larr; Back to products
         </Link>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">{product.name}</h1>
-            <p className="text-zinc-400 mt-1">{product.url}</p>
+            <p className="text-[#555] mt-1">{product.url}</p>
           </div>
           <div className="flex gap-2">
             {runs.length > 0 && (
@@ -311,7 +308,7 @@ export default function ProductPage() {
             )}
             <Button
               variant="ghost"
-              className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+              className="text-[#EF4444] hover:text-[#EF4444] hover:bg-[#EF4444]/10"
               onClick={handleDeleteProduct}
               disabled={deletingProduct}
             >
@@ -322,9 +319,9 @@ export default function ProductPage() {
       </div>
 
       {summary && (
-        <Card className="bg-zinc-900 border-zinc-800 mb-6">
+        <Card className="mb-6">
           <CardHeader>
-            <CardTitle className="text-sm font-medium text-zinc-400">
+            <CardTitle className="text-sm font-medium text-[#888]">
               Product Analysis
             </CardTitle>
           </CardHeader>
@@ -342,18 +339,31 @@ export default function ProductPage() {
       )}
 
       <Tabs defaultValue="personas" className="space-y-6">
-        <TabsList className="bg-zinc-900 border border-zinc-800">
-          <TabsTrigger value="personas">
+        <TabsList className="bg-transparent border-b border-dashed border-[#333] rounded-none p-0 h-auto">
+          <TabsTrigger
+            value="personas"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#E8FF00] data-[state=active]:bg-transparent data-[state=active]:text-[#E8FF00] text-[#555] px-4 py-2"
+          >
             Personas ({personas.length})
           </TabsTrigger>
-          <TabsTrigger value="plans">Plans ({plans.length})</TabsTrigger>
-          <TabsTrigger value="runs">Runs ({runs.length})</TabsTrigger>
+          <TabsTrigger
+            value="plans"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#E8FF00] data-[state=active]:bg-transparent data-[state=active]:text-[#E8FF00] text-[#555] px-4 py-2"
+          >
+            Plans ({plans.length})
+          </TabsTrigger>
+          <TabsTrigger
+            value="runs"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#E8FF00] data-[state=active]:bg-transparent data-[state=active]:text-[#E8FF00] text-[#555] px-4 py-2"
+          >
+            Runs ({runs.length})
+          </TabsTrigger>
         </TabsList>
 
         {/* Personas Tab */}
         <TabsContent value="personas" className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-[#555]">
               Realistic user personas for synthetic testing
             </p>
             <Button
@@ -375,8 +385,8 @@ export default function ProductPage() {
           </div>
 
           {personas.length === 0 ? (
-            <Card className="bg-zinc-900 border-zinc-800">
-              <CardContent className="py-12 text-center text-zinc-500">
+            <Card>
+              <CardContent className="py-12 text-center text-[#555]">
                 No personas yet. Click Generate to create them from the product
                 analysis.
               </CardContent>
@@ -389,13 +399,10 @@ export default function ProductPage() {
                   (p) => p.personaId === persona.id
                 );
                 return (
-                  <Card
-                    key={persona.id}
-                    className="bg-zinc-900 border-zinc-800"
-                  >
+                  <Card key={persona.id}>
                     <CardHeader>
                       <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">
+                        <CardTitle className="text-lg font-bold">
                           {persona.name}
                         </CardTitle>
                         <Badge
@@ -405,70 +412,71 @@ export default function ProductPage() {
                           {fields.archetype?.replace("_", " ")}
                         </Badge>
                       </div>
-                      <CardDescription className="text-zinc-400">
+                      <CardDescription>
                         {persona.role}
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid grid-cols-2 gap-2 text-xs text-zinc-400 mb-4">
+                      <div className="grid grid-cols-2 gap-2 text-xs text-[#555] mb-4">
                         <div>
                           Tech comfort:{" "}
-                          <span className="text-zinc-200">
+                          <span className="text-[#F5F5F5] font-mono">
                             {fields.techComfort}
                           </span>
                         </div>
                         <div>
                           Time pressure:{" "}
-                          <span className="text-zinc-200">
+                          <span className="text-[#F5F5F5] font-mono">
                             {fields.timePressure}
                           </span>
                         </div>
                         <div>
                           Retry willingness:{" "}
-                          <span className="text-zinc-200">
+                          <span className="text-[#F5F5F5] font-mono">
                             {fields.retryWillingness}
                           </span>
                         </div>
                         <div>
                           AI tolerance:{" "}
-                          <span className="text-zinc-200">
+                          <span className="text-[#F5F5F5] font-mono">
                             {fields.aiAutonomyTolerance}
                           </span>
                         </div>
                       </div>
-                      <Separator className="bg-zinc-800 my-3" />
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-zinc-500">
-                          {personaPlans.length} plan(s)
-                        </span>
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
-                            onClick={() => handleDeletePersona(persona.id)}
-                            disabled={deletingPersona === persona.id}
-                          >
-                            {deletingPersona === persona.id ? "Deleting..." : "Delete"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleGeneratePlans(persona.id)}
-                            disabled={generatingPlans === persona.id || generatingAllPlans}
-                          >
-                            {generatingPlans === persona.id ? (
-                              <>
-                                <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                                </svg>
-                                Generating...
-                              </>
-                            ) : (
-                              "Generate Plans"
-                            )}
-                          </Button>
+                      <div className="border-t border-dashed border-[#333] pt-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-[#555] font-mono">
+                            {personaPlans.length} plan(s)
+                          </span>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-[#EF4444] hover:text-[#EF4444] hover:bg-[#EF4444]/10"
+                              onClick={() => handleDeletePersona(persona.id)}
+                              disabled={deletingPersona === persona.id}
+                            >
+                              {deletingPersona === persona.id ? "Deleting..." : "Delete"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleGeneratePlans(persona.id)}
+                              disabled={generatingPlans === persona.id || generatingAllPlans}
+                            >
+                              {generatingPlans === persona.id ? (
+                                <>
+                                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                  </svg>
+                                  Generating...
+                                </>
+                              ) : (
+                                "Generate Plans"
+                              )}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </CardContent>
@@ -482,7 +490,7 @@ export default function ProductPage() {
         {/* Plans Tab */}
         <TabsContent value="plans" className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm text-[#555]">
               Review and approve plans before running
             </p>
             <div className="flex gap-2">
@@ -530,8 +538,8 @@ export default function ProductPage() {
           </div>
 
           {plans.length === 0 ? (
-            <Card className="bg-zinc-900 border-zinc-800">
-              <CardContent className="py-12 text-center text-zinc-500">
+            <Card>
+              <CardContent className="py-12 text-center text-[#555]">
                 No plans yet. Generate plans from the Personas tab first.
               </CardContent>
             </Card>
@@ -546,21 +554,21 @@ export default function ProductPage() {
                 return (
                   <Card
                     key={plan.id}
-                    className={`bg-zinc-900 border-zinc-800 ${plan.approved ? "border-green-900" : ""}`}
+                    className={plan.approved ? "border-[#4ADE80]/30" : ""}
                   >
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div>
-                          <CardTitle className="text-base">
+                          <CardTitle className="text-base font-bold">
                             {dims.mission}
                           </CardTitle>
-                          <CardDescription className="text-zinc-400">
+                          <CardDescription>
                             {persona?.name} &middot; {plan.teacherState}
                           </CardDescription>
                         </div>
                         <div className="flex gap-2">
                           {plan.approved ? (
-                            <Badge className="bg-green-900/50 text-green-400 border-green-800">
+                            <Badge className="bg-[#4ADE80]/10 text-[#4ADE80] border-[#4ADE80]/30">
                               Approved
                             </Badge>
                           ) : (
@@ -581,14 +589,14 @@ export default function ProductPage() {
                           pressure: {dims.timePressure}
                         </Badge>
                       </div>
-                      <div className="text-xs text-zinc-400 space-y-1 mb-4">
+                      <div className="text-xs text-[#555] space-y-1 mb-4 font-mono">
                         {steps.slice(0, 5).map((step: string, i: number) => (
                           <div key={i}>
                             {i + 1}. {step}
                           </div>
                         ))}
                         {steps.length > 5 && (
-                          <div className="text-zinc-600">
+                          <div className="text-[#333]">
                             +{steps.length - 5} more steps
                           </div>
                         )}
@@ -606,7 +614,7 @@ export default function ProductPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+                          className="text-[#EF4444] hover:text-[#EF4444] hover:bg-[#EF4444]/10"
                           onClick={() => handleDeletePlan(plan.id)}
                         >
                           Delete
@@ -622,11 +630,11 @@ export default function ProductPage() {
 
         {/* Runs Tab */}
         <TabsContent value="runs" className="space-y-4">
-          <p className="text-sm text-zinc-400">Test run history and results</p>
+          <p className="text-sm text-[#555]">Test run history and results</p>
 
           {runs.length === 0 ? (
-            <Card className="bg-zinc-900 border-zinc-800">
-              <CardContent className="py-12 text-center text-zinc-500">
+            <Card>
+              <CardContent className="py-12 text-center text-[#555]">
                 No runs yet. Approve some plans and start a run.
               </CardContent>
             </Card>
@@ -637,17 +645,14 @@ export default function ProductPage() {
                   (s) => s.runId === run.id
                 );
                 return (
-                  <Card
-                    key={run.id}
-                    className="bg-zinc-900 border-zinc-800"
-                  >
+                  <Card key={run.id}>
                     <CardHeader>
                       <div className="flex items-center justify-between">
                         <div>
-                          <CardTitle className="text-base">
+                          <CardTitle className="text-base font-mono">
                             Run {run.id.slice(0, 8)}
                           </CardTitle>
-                          <CardDescription className="text-zinc-400">
+                          <CardDescription>
                             {new Date(run.createdAt * 1000).toLocaleString()}
                           </CardDescription>
                         </div>
@@ -655,11 +660,11 @@ export default function ProductPage() {
                           variant="outline"
                           className={
                             run.status === "complete"
-                              ? "text-green-400 border-green-800"
+                              ? "text-[#4ADE80] border-[#4ADE80]/30"
                               : run.status === "running"
-                                ? "text-yellow-400 border-yellow-800"
+                                ? "text-[#E8FF00] border-[#E8FF00]/30"
                                 : run.status === "failed"
-                                  ? "text-red-400 border-red-800"
+                                  ? "text-[#EF4444] border-[#EF4444]/30"
                                   : ""
                           }
                         >
@@ -677,7 +682,7 @@ export default function ProductPage() {
                             return (
                               <div
                                 key={session.id}
-                                className="flex items-center justify-between text-sm"
+                                className="flex items-center justify-between text-sm border-b border-dashed border-[#333] pb-2"
                               >
                                 <span>
                                   {persona?.name || "Unknown"} &middot;{" "}

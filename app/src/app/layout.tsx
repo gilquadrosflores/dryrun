@@ -26,17 +26,19 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-950 text-zinc-100`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0a0a0a] text-[#F5F5F5]`}
       >
         <div className="min-h-screen">
-          <nav className="border-b border-zinc-800 px-6 py-4">
+          <nav className="border-b border-dashed border-[#333] px-6 py-4">
             <div className="max-w-7xl mx-auto flex items-center justify-between">
-              <a href="/" className="text-xl font-bold tracking-tight">
-                Dryrun
+              <a href="/" className="text-2xl font-black tracking-tighter">
+                DRYRUN
               </a>
-              <span className="text-xs text-zinc-500">
-                Synthetic User Testing Platform
-              </span>
+              <div className="flex items-center gap-6">
+                <span className="text-xs text-[#555] font-mono uppercase tracking-widest">
+                  Synthetic User Testing
+                </span>
+              </div>
             </div>
           </nav>
           <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>

@@ -51,10 +51,10 @@ export default function NewProduct() {
     <div className="max-w-2xl mx-auto">
       <h1 className="text-3xl font-bold tracking-tight mb-8">Add Product</h1>
 
-      <Card className="bg-zinc-900 border-zinc-800">
+      <Card>
         <CardHeader>
           <CardTitle>Product Details</CardTitle>
-          <CardDescription className="text-zinc-400">
+          <CardDescription>
             Enter your product URL and we&apos;ll analyze it to generate
             personas and test plans.
           </CardDescription>
@@ -70,7 +70,7 @@ export default function NewProduct() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My Product"
                 required
-                className="bg-zinc-800 border-zinc-700"
+                className="bg-[#0a0a0a] border-dashed border-[#333] focus:border-[#E8FF00]"
               />
             </div>
 
@@ -84,9 +84,9 @@ export default function NewProduct() {
                 placeholder="https://myproduct.com"
                 type="url"
                 required
-                className="bg-zinc-800 border-zinc-700"
+                className="bg-[#0a0a0a] border-dashed border-[#333] focus:border-[#E8FF00]"
               />
-              <p className="text-xs text-zinc-500 mt-1">
+              <p className="text-xs text-[#555] mt-1">
                 We&apos;ll crawl this page and sitemap to understand your
                 product.
               </p>
@@ -101,7 +101,7 @@ export default function NewProduct() {
                 onChange={(e) => setGoals(e.target.value)}
                 placeholder="What do you want to test? E.g., 'Test the onboarding flow for new teachers' or 'See if users can find the export feature'"
                 rows={4}
-                className="bg-zinc-800 border-zinc-700"
+                className="bg-[#0a0a0a] border-dashed border-[#333] focus:border-[#E8FF00]"
               />
             </div>
 
