@@ -49,6 +49,15 @@ const ARCHETYPE_OVERRIDES: Record<string, string> = {
     "Test edge cases. Look for team/admin features. Check export and reporting flows even if not part of the mission.",
 };
 
+// Fallback actions to try when observe() returns nothing
+const FALLBACK_ACTIONS = [
+  "Look for and click a 'Sign In', 'Log In', or 'Get Started' button",
+  "Look for and click any prominent button or call-to-action on the page",
+  "Scroll down to find more content or interactive elements",
+  "Look for a navigation menu, hamburger icon, or header links and click one",
+  "Look for any link or button that relates to the main functionality of this product",
+];
+
 export async function runBrowserAgent(
   persona: PersonaConfig,
   plan: PlanConfig,
@@ -92,11 +101,11 @@ Current state: ${plan.teacherState}
 Mission: ${plan.missionDescription}
 
 Behavioral rules:
-- Do not read onboarding instructions or tooltips unless you are stuck
-- Attempt the most visually obvious action first
+- Look for buttons, links, and interactive elements on the page
+- If you see a login/signup page, note it as a blocker but try to explore what's visible
+- Click on the most visually prominent action first (large buttons, CTAs)
 - If something takes more than 2 clicks to find, try a different path
 - If you see an error, try once to recover, then consider stopping
-- Do not explore features unrelated to your current goal
 - Your patience budget is: ${persona.patienceBudget}
 - Your tech comfort level is: ${persona.techComfort}
 - Your time pressure is: ${persona.timePressure}
@@ -109,7 +118,6 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
     // Navigate to the entry point (ensure it's a valid URL)
     let startUrl = plan.entryPoint;
     if (!startUrl.startsWith("http://") && !startUrl.startsWith("https://")) {
-      // Not a URL — use product URL as fallback
       startUrl = plan.productUrl;
     }
     trace.log({
@@ -118,7 +126,12 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
       result: "starting session",
     });
 
-    await stagehand.act(`Navigate to ${startUrl}`);
+    // Use page.goto() for actual URL navigation (act() only handles DOM interactions)
+    const page = stagehand.context.pages()[0];
+    await page.goto(startUrl, { waitUntil: "load" });
+
+    // Give the page time to render (SPAs often need this)
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     trace.log({
       action: "page_loaded",
@@ -126,9 +139,39 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
       note: "Assessing the page",
     });
 
-    // Agent loop: observe -> decide -> act
+    // First, try to understand what's on the page
+    let pageContext = "";
+    try {
+      const pageState = await stagehand.extract(
+        "Describe what you see on this page. What is the main content? Are there buttons, links, forms, or navigation? Is there a login/signup form? What can a user do here?",
+        z.object({
+          description: z.string(),
+          hasLogin: z.boolean(),
+          hasButtons: z.boolean(),
+          mainActions: z.array(z.string()),
+        })
+      );
+      pageContext = pageState.description;
+      trace.log({
+        action: "page_analysis",
+        result: pageState.hasLogin ? "login page detected" : "content page",
+        note: pageState.description,
+      });
+      if (pageState.mainActions.length > 0) {
+        agentNotes.push(`Available actions: ${pageState.mainActions.join(", ")}`);
+      }
+      if (pageState.hasLogin) {
+        agentNotes.push("Login/signup form detected — authentication required");
+      }
+    } catch {
+      // Page analysis failed, continue
+    }
+
+    // Agent loop: observe -> decide -> act, with fallback strategies
     let consecutiveFailures = 0;
-    const maxConsecutiveFailures = 3;
+    const maxConsecutiveFailures = 5; // more patient
+    let fallbackIndex = 0;
+    let hasActedSuccessfully = false;
 
     for (let step = 0; step < maxSteps; step++) {
       // Check timeout
@@ -146,83 +189,134 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
       try {
         // Observe available actions
         const observations = await stagehand.observe(
-          `What actions can I take on this page to accomplish my mission: "${plan.missionDescription}"? I am on step ${step + 1}.`
+          `I am trying to: "${plan.missionDescription}". What interactive elements (buttons, links, form fields, navigation items) can I see and click on this page? List ALL clickable elements, not just ones related to the mission.`
         );
 
-        if (!observations || observations.length === 0) {
+        if (observations && observations.length > 0) {
+          // We found something — pick the best action
+          const selectedAction = observations[0];
+          const actionDescription = selectedAction.description;
+
           trace.log({
             action: "observe",
-            result: "no actionable elements found",
-            note: "Dead end - cannot find anything to interact with",
+            result: `found ${observations.length} element(s)`,
+            note: observations.map((o) => o.description).join(" | "),
           });
-          agentNotes.push(
-            `Step ${step + 1}: Dead end - no actionable elements`
-          );
-          consecutiveFailures++;
 
-          if (
-            consecutiveFailures >= maxConsecutiveFailures ||
-            persona.retryWillingness === "low"
-          ) {
+          trace.log({
+            action: "plan",
+            target: actionDescription,
+            note: `Deciding to: ${actionDescription}`,
+          });
+
+          // Execute the action
+          const actResult = await stagehand.act(actionDescription);
+
+          trace.log({
+            action: "act",
+            target: actionDescription,
+            result: actResult.success ? "success" : "failed",
+            note: actResult.message || undefined,
+          });
+
+          if (actResult.success) {
+            consecutiveFailures = 0;
+            hasActedSuccessfully = true;
+            fallbackIndex = 0; // reset fallbacks
+            // Wait for page transition
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          } else {
+            consecutiveFailures++;
+            agentNotes.push(
+              `Step ${step + 1}: Action failed - ${actResult.message}`
+            );
+          }
+        } else {
+          // Observe returned nothing — try fallback direct actions
+          trace.log({
+            action: "observe",
+            result: "no elements found by observe",
+            note: "Trying fallback action strategy",
+          });
+
+          if (fallbackIndex < FALLBACK_ACTIONS.length) {
+            const fallbackAction = FALLBACK_ACTIONS[fallbackIndex];
+            trace.log({
+              action: "fallback",
+              target: fallbackAction,
+              note: `Attempting fallback ${fallbackIndex + 1}/${FALLBACK_ACTIONS.length}`,
+            });
+
+            try {
+              const actResult = await stagehand.act(fallbackAction);
+              trace.log({
+                action: "act",
+                target: fallbackAction,
+                result: actResult.success ? "success" : "failed",
+                note: actResult.message || undefined,
+              });
+
+              if (actResult.success) {
+                consecutiveFailures = 0;
+                hasActedSuccessfully = true;
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+              } else {
+                consecutiveFailures++;
+              }
+            } catch {
+              consecutiveFailures++;
+            }
+            fallbackIndex++;
+          } else {
+            // All fallbacks exhausted
+            consecutiveFailures++;
+            agentNotes.push(
+              `Step ${step + 1}: Dead end - no elements found, all fallbacks tried`
+            );
+          }
+
+          // Check if we should give up
+          const patienceLimit =
+            persona.retryWillingness === "low" ? 3 :
+            persona.retryWillingness === "high" ? maxConsecutiveFailures : 4;
+
+          if (consecutiveFailures >= patienceLimit) {
             abandonmentPoint = `Step ${step + 1}: No actionable elements after ${consecutiveFailures} attempts`;
             trace.log({
               action: "abandon",
               result: "giving up",
-              note: "Frustrated - nothing to do here",
+              note: hasActedSuccessfully
+                ? "Was making progress but hit a wall"
+                : "Could not find anything to interact with from the start",
             });
             break;
           }
           continue;
         }
 
-        // Select the action based on persona behavior
-        const selectedAction = observations[0];
-        const actionDescription = selectedAction.description;
-
-        trace.log({
-          action: "plan",
-          target: actionDescription,
-          note: `Deciding to: ${actionDescription}`,
-        });
-
-        // Execute the action
-        const actResult = await stagehand.act(actionDescription);
-
-        trace.log({
-          action: "act",
-          target: actionDescription,
-          result: actResult.success ? "success" : "failed",
-          note: actResult.message || undefined,
-        });
-
-        if (actResult.success) {
-          consecutiveFailures = 0;
-        } else {
-          consecutiveFailures++;
-          agentNotes.push(
-            `Step ${step + 1}: Action failed - ${actResult.message}`
-          );
-
-          if (consecutiveFailures >= maxConsecutiveFailures) {
-            abandonmentPoint = `Step ${step + 1}: ${maxConsecutiveFailures} consecutive failures`;
-            trace.log({
-              action: "abandon",
-              result: "too many failures",
-              note: "Giving up after repeated failures",
-            });
-            break;
-          }
+        // After a successful action, check if we should give up on the overall goal
+        if (consecutiveFailures >= maxConsecutiveFailures) {
+          abandonmentPoint = `Step ${step + 1}: ${maxConsecutiveFailures} consecutive failures`;
+          trace.log({
+            action: "abandon",
+            result: "too many failures",
+            note: "Giving up after repeated failures",
+          });
+          break;
         }
 
-        // Periodically check progress toward goal
-        if (step > 0 && step % 5 === 0) {
+        // Periodically check progress toward goal (every 3 steps instead of 5)
+        if (step > 0 && step % 3 === 0) {
           try {
             const progressCheck = await stagehand.extract(
-              `Has the mission been accomplished? Mission: "${plan.missionDescription}". Rate progress as: GOAL_ACHIEVED (fully done), PARTIAL (some progress), or NOT_YET (not started/minimal progress). Also note any frustrations or confusion.`,
+              `Has the mission been accomplished? Mission: "${plan.missionDescription}".
+               Rate progress: GOAL_ACHIEVED (fully done), PARTIAL (some progress made), NOT_YET (barely started).
+               Note any blockers like login walls, errors, or missing features.`,
               z.object({
                 status: z.string(),
                 reason: z.string(),
                 frustration: z.string().optional(),
+                blockers: z.array(z.string()).optional(),
               })
             );
 
@@ -235,6 +329,11 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
             if (progressCheck.frustration) {
               agentNotes.push(
                 `Step ${step + 1}: ${progressCheck.frustration}`
+              );
+            }
+            if (progressCheck.blockers && progressCheck.blockers.length > 0) {
+              agentNotes.push(
+                `Step ${step + 1}: Blockers: ${progressCheck.blockers.join(", ")}`
               );
             }
 
@@ -262,8 +361,12 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
 
         // Check abandonment triggers
         for (const trigger of persona.abandonmentTriggers) {
+          const lastTraceEntry = trace.getEntries().slice(-1)[0];
+          const lastNote = lastTraceEntry?.note || "";
+          const lastResult = lastTraceEntry?.result || "";
           if (
-            actResult.message?.toLowerCase().includes(trigger.toLowerCase())
+            lastNote.toLowerCase().includes(trigger.toLowerCase()) ||
+            lastResult.toLowerCase().includes(trigger.toLowerCase())
           ) {
             abandonmentPoint = `Step ${step + 1}: Triggered abandonment - ${trigger}`;
             trace.log({
@@ -296,15 +399,19 @@ ${archetypeOverride ? `Persona-specific behavior:\n${archetypeOverride}` : ""}`,
     // Final extraction to understand end state
     try {
       const finalState = await stagehand.extract(
-        `Describe the current page state and what has been accomplished. Mission was: "${plan.missionDescription}"`,
+        `Describe the current page state and what has been accomplished. Mission was: "${plan.missionDescription}". What page are we on? What content is visible?`,
         z.object({
           pageDescription: z.string(),
+          currentUrl: z.string().optional(),
           accomplishments: z.string(),
           remainingTasks: z.string(),
         })
       );
       agentNotes.push(`Final state: ${finalState.pageDescription}`);
       agentNotes.push(`Accomplished: ${finalState.accomplishments}`);
+      if (finalState.currentUrl) {
+        agentNotes.push(`Final URL: ${finalState.currentUrl}`);
+      }
 
       if (goalAchieved === "no" && finalState.accomplishments.length > 20) {
         goalAchieved = "partial";
