@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { MarkdownRenderer } from "@/components/markdown-renderer";
 import Link from "next/link";
 
 interface SessionData {
@@ -59,6 +60,13 @@ interface TraceEntry {
   note?: string;
 }
 
+interface FrictionEvent {
+  step: number;
+  severity: number;
+  category: string;
+  description: string;
+}
+
 const ACTION_COLORS: Record<string, string> = {
   navigate: "text-blue-400 border-blue-800 bg-blue-950/30",
   page_loaded: "text-blue-400 border-blue-800 bg-blue-950/30",
@@ -73,6 +81,61 @@ const ACTION_COLORS: Record<string, string> = {
   progress_check: "text-indigo-400 border-indigo-800 bg-indigo-950/30",
   screenshot: "text-zinc-400 border-zinc-700 bg-zinc-900/30",
 };
+
+const ACTION_ICONS: Record<string, string> = {
+  navigate: "\u2192",
+  page_loaded: "\u25CB",
+  observe: "\u25C9",
+  plan: "\u2318",
+  act: "\u25B6",
+  error: "\u2717",
+  fatal_error: "\u2717",
+  abandon: "\u23F9",
+  complete: "\u2713",
+  timeout: "\u23F1",
+  progress_check: "\u2026",
+  screenshot: "\u25A3",
+};
+
+function formatDuration(seconds: number | null): string {
+  if (seconds == null) return "N/A";
+  if (seconds >= 60) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}m ${s}s`;
+  }
+  return `${seconds}s`;
+}
+
+function getSeverityColor(severity: number): {
+  bar: string;
+  bg: string;
+  text: string;
+  label: string;
+} {
+  if (severity >= 4) {
+    return {
+      bar: "bg-red-500",
+      bg: "bg-red-950/30",
+      text: "text-red-400",
+      label: "Critical",
+    };
+  }
+  if (severity >= 3) {
+    return {
+      bar: "bg-orange-500",
+      bg: "bg-orange-950/30",
+      text: "text-orange-400",
+      label: "Moderate",
+    };
+  }
+  return {
+    bar: "bg-yellow-500",
+    bg: "bg-yellow-950/30",
+    text: "text-yellow-400",
+    label: "Minor",
+  };
+}
 
 export default function SessionDetailPage() {
   const params = useParams();
@@ -112,7 +175,7 @@ export default function SessionDetailPage() {
   const agentNotes: string[] = session.agentNotes
     ? JSON.parse(session.agentNotes)
     : [];
-  const frictionEvents = score?.frictionEvents
+  const frictionEvents: FrictionEvent[] = score?.frictionEvents
     ? JSON.parse(score.frictionEvents)
     : [];
 
@@ -130,95 +193,136 @@ export default function SessionDetailPage() {
     return `${(delta / 1000).toFixed(1)}s`;
   };
 
+  const goalStatusColor =
+    session.goalAchieved === "yes"
+      ? "text-green-400"
+      : session.goalAchieved === "partial"
+        ? "text-yellow-400"
+        : "text-red-400";
+
+  const statusBadgeColor =
+    session.status === "complete"
+      ? "text-green-400 border-green-800 bg-green-950/20"
+      : session.status === "abandoned"
+        ? "text-orange-400 border-orange-800 bg-orange-950/20"
+        : session.status === "failed"
+          ? "text-red-400 border-red-800 bg-red-950/20"
+          : "text-yellow-400 border-yellow-800 bg-yellow-950/20";
+
   return (
     <div>
-      <div className="mb-8">
+      {/* Navigation */}
+      <div className="mb-6">
         <Link
           href={`/products/${productId}`}
           className="text-sm text-zinc-500 hover:text-zinc-300 mb-2 block"
         >
           &larr; Back to product
         </Link>
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-bold tracking-tight">
-            Session {session.id.slice(0, 8)}
-          </h1>
-          <Badge
-            variant="outline"
-            className={
-              session.status === "complete"
-                ? "text-green-400 border-green-800"
-                : session.status === "abandoned"
-                  ? "text-orange-400 border-orange-800"
-                  : session.status === "failed"
-                    ? "text-red-400 border-red-800"
-                    : "text-yellow-400 border-yellow-800"
-            }
-          >
-            {session.status}
-          </Badge>
-        </div>
-        {persona && (
-          <p className="text-zinc-400 mt-1">
-            {persona.name} ({persona.role})
-            {mission && <> &middot; {mission.description}</>}
-          </p>
-        )}
-        {plan && (
-          <p className="text-zinc-500 text-sm mt-1 italic">
-            &ldquo;{plan.teacherState}&rdquo;
-          </p>
-        )}
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-zinc-500 mb-1">Goal</p>
-            <p className={`text-xl font-bold capitalize ${
-              session.goalAchieved === "yes" ? "text-green-400" :
-              session.goalAchieved === "partial" ? "text-yellow-400" :
-              "text-red-400"
-            }`}>
-              {session.goalAchieved || "N/A"}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-zinc-500 mb-1">Duration</p>
-            <p className="text-xl font-bold">
-              {session.durationSeconds
-                ? session.durationSeconds >= 60
-                  ? `${Math.floor(session.durationSeconds / 60)}m ${session.durationSeconds % 60}s`
-                  : `${session.durationSeconds}s`
-                : "N/A"}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-zinc-500 mb-1">Steps</p>
-            <p className="text-xl font-bold">{trace.length}</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-zinc-500 mb-1">Dead Ends</p>
-            <p className="text-xl font-bold text-orange-400">
-              {score?.deadEndCount ?? "N/A"}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="bg-zinc-900 border-zinc-800">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-xs text-zinc-500 mb-1">Recoveries</p>
-            <p className="text-xl font-bold text-blue-400">
-              {score?.recoveryCount ?? "N/A"}
-            </p>
-          </CardContent>
-        </Card>
+      {/* Summary Header Card */}
+      <Card className="bg-zinc-900 border-zinc-800 mb-6">
+        <CardContent className="pt-5 pb-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight">
+                Session {session.id.slice(0, 8)}
+              </h1>
+              <Badge variant="outline" className={statusBadgeColor}>
+                {session.status}
+              </Badge>
+            </div>
+            {plan && (
+              <p className="text-zinc-500 text-sm italic max-w-md truncate">
+                &ldquo;{plan.teacherState}&rdquo;
+              </p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {/* Goal Status */}
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg ${
+                session.goalAchieved === "yes"
+                  ? "bg-green-950/40 text-green-400"
+                  : session.goalAchieved === "partial"
+                    ? "bg-yellow-950/40 text-yellow-400"
+                    : "bg-red-950/40 text-red-400"
+              }`}>
+                {session.goalAchieved === "yes" ? "\u2713" : session.goalAchieved === "partial" ? "\u00BD" : "\u2717"}
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500">Goal</p>
+                <p className={`text-sm font-semibold capitalize ${goalStatusColor}`}>
+                  {session.goalAchieved || "N/A"}
+                </p>
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center text-lg text-zinc-400">
+                &#x23F1;
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500">Duration</p>
+                <p className="text-sm font-semibold text-zinc-100">
+                  {formatDuration(session.durationSeconds)}
+                </p>
+              </div>
+            </div>
+
+            {/* Persona */}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center text-lg text-zinc-400">
+                &#x1F464;
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500">Persona</p>
+                <p className="text-sm font-semibold text-zinc-100 truncate max-w-[160px]">
+                  {persona ? `${persona.name}` : "N/A"}
+                </p>
+                {persona && (
+                  <p className="text-[10px] text-zinc-500">{persona.role}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Mission */}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-zinc-800 flex items-center justify-center text-lg text-zinc-400">
+                &#x1F3AF;
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-500">Mission</p>
+                <p className="text-sm font-semibold text-zinc-100 truncate max-w-[200px]">
+                  {mission ? mission.description : "N/A"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Quick Stats Row */}
+      <div className="grid grid-cols-4 gap-3 mb-6">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Steps</p>
+          <p className="text-xl font-bold text-zinc-100">{trace.length}</p>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Dead Ends</p>
+          <p className="text-xl font-bold text-orange-400">{score?.deadEndCount ?? "N/A"}</p>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Recoveries</p>
+          <p className="text-xl font-bold text-blue-400">{score?.recoveryCount ?? "N/A"}</p>
+        </div>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500 mb-0.5">Friction Events</p>
+          <p className="text-xl font-bold text-yellow-400">{frictionEvents.length}</p>
+        </div>
       </div>
 
       {/* Abandonment point callout */}
@@ -238,6 +342,7 @@ export default function SessionDetailPage() {
         <TabsList className="bg-zinc-900 border border-zinc-800">
           <TabsTrigger value="report">Report</TabsTrigger>
           <TabsTrigger value="trace">Trace ({trace.length})</TabsTrigger>
+          <TabsTrigger value="friction">Friction ({frictionEvents.length})</TabsTrigger>
           <TabsTrigger value="screenshots">
             Screenshots ({screenshots.length})
           </TabsTrigger>
@@ -252,9 +357,10 @@ export default function SessionDetailPage() {
           {report ? (
             <Card className="bg-zinc-900 border-zinc-800">
               <CardContent className="pt-6">
-                <div className="prose prose-invert prose-sm max-w-none">
-                  <div dangerouslySetInnerHTML={{ __html: markdownToHtml(report.content) }} />
-                </div>
+                <MarkdownRenderer
+                  content={report.content}
+                  className="prose prose-invert prose-sm max-w-none"
+                />
               </CardContent>
             </Card>
           ) : (
@@ -268,7 +374,7 @@ export default function SessionDetailPage() {
           )}
         </TabsContent>
 
-        {/* Trace Tab — improved with colors, timeline, and expand */}
+        {/* Trace Tab -- compact timeline with better visual hierarchy */}
         <TabsContent value="trace">
           <Card className="bg-zinc-900 border-zinc-800">
             <CardHeader className="pb-2">
@@ -305,7 +411,7 @@ export default function SessionDetailPage() {
                         variant="outline"
                         onClick={() => setReplayIndex(null)}
                       >
-                        Exit Replay
+                        Exit
                       </Button>
                     </>
                   ) : (
@@ -321,8 +427,11 @@ export default function SessionDetailPage() {
                 </div>
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-1">
+            <CardContent className="px-4">
+              <div className="relative">
+                {/* Continuous timeline line */}
+                <div className="absolute left-[72px] top-0 bottom-0 w-px bg-zinc-800" />
+
                 {trace.map((entry, i) => {
                   const isHighlighted = replayIndex === i;
                   const isVisible = replayIndex === null || i <= replayIndex;
@@ -330,69 +439,64 @@ export default function SessionDetailPage() {
 
                   const colorClass = ACTION_COLORS[entry.action] || "text-zinc-400 border-zinc-700";
                   const isExpanded = expandedRows.has(i);
-                  const hasLongContent =
-                    (entry.target && entry.target.length > 60) ||
-                    (entry.note && entry.note.length > 60);
+                  const hasDetails = !!(entry.target || entry.note);
+                  const icon = ACTION_ICONS[entry.action] || "\u2022";
 
                   return (
                     <div
                       key={i}
-                      className={`flex items-start gap-3 px-3 py-2 rounded text-sm cursor-pointer transition-colors ${
+                      className={`flex items-start gap-2 py-1 relative cursor-pointer transition-colors rounded ${
                         isHighlighted
                           ? "bg-zinc-800 ring-1 ring-zinc-600"
-                          : "hover:bg-zinc-800/50"
+                          : "hover:bg-zinc-800/30"
                       }`}
-                      onClick={() => hasLongContent && toggleRow(i)}
+                      onClick={() => hasDetails && toggleRow(i)}
                     >
                       {/* Step number + time delta */}
-                      <div className="flex flex-col items-end w-16 flex-shrink-0">
-                        <span className="text-zinc-500 text-xs font-mono">{i + 1}</span>
-                        <span className="text-zinc-600 text-[10px]">{getTimeDelta(i)}</span>
+                      <div className="flex items-center gap-1 w-[60px] flex-shrink-0 justify-end">
+                        <span className="text-zinc-600 text-[10px] font-mono">{getTimeDelta(i)}</span>
+                        <span className="text-zinc-500 text-[10px] font-mono w-[24px] text-right">{i + 1}</span>
                       </div>
 
                       {/* Timeline dot */}
-                      <div className="flex flex-col items-center pt-1">
-                        <div className={`w-2 h-2 rounded-full ${
-                          entry.action === "error" || entry.action === "fatal_error"
-                            ? "bg-red-500"
-                            : entry.action === "complete"
-                              ? "bg-emerald-500"
-                              : entry.action === "abandon"
-                                ? "bg-orange-500"
-                                : "bg-zinc-500"
-                        }`} />
-                        {i < trace.length - 1 && (
-                          <div className="w-px h-full bg-zinc-800 mt-1" />
-                        )}
+                      <div className="relative z-10 flex-shrink-0 w-[24px] flex items-center justify-center">
+                        <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] border ${colorClass}`}>
+                          {icon}
+                        </div>
                       </div>
 
-                      {/* Content */}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${colorClass}`}>
+                      {/* Content - single line compact */}
+                      <div className="flex-1 min-w-0 py-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-medium ${colorClass.split(" ")[0]}`}>
                             {entry.action}
-                          </Badge>
+                          </span>
                           {entry.result && (
-                            <span className={`text-xs ${
+                            <span className={`text-[10px] ${
                               entry.result === "success"
                                 ? "text-green-500"
                                 : entry.result === "failed"
                                   ? "text-red-500"
-                                  : "text-zinc-400"
+                                  : "text-zinc-500"
                             }`}>
                               {entry.result}
                             </span>
                           )}
+                          {entry.target && !isExpanded && (
+                            <span className="text-zinc-500 text-xs truncate">
+                              {entry.target}
+                            </span>
+                          )}
                         </div>
-                        {entry.target && (
-                          <p className={`text-zinc-300 text-xs mt-0.5 ${isExpanded ? "" : "truncate"}`}>
-                            {entry.target}
-                          </p>
-                        )}
-                        {entry.note && (
-                          <p className={`text-zinc-500 text-xs mt-0.5 italic ${isExpanded ? "" : "truncate"}`}>
-                            {entry.note}
-                          </p>
+                        {isExpanded && (
+                          <div className="mt-1 ml-0">
+                            {entry.target && (
+                              <p className="text-zinc-300 text-xs">{entry.target}</p>
+                            )}
+                            {entry.note && (
+                              <p className="text-zinc-500 text-xs italic mt-0.5">{entry.note}</p>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -401,6 +505,119 @@ export default function SessionDetailPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Friction Heatmap Tab */}
+        <TabsContent value="friction">
+          {frictionEvents.length === 0 ? (
+            <Card className="bg-zinc-900 border-zinc-800">
+              <CardContent className="py-12 text-center text-zinc-500">
+                No friction events detected in this session.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {/* Heatmap visualization */}
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Friction Heatmap</CardTitle>
+                  <p className="text-xs text-zinc-500">
+                    Severity distribution across the session timeline. Each bar represents a friction event at the corresponding step.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {/* Severity legend */}
+                  <div className="flex items-center gap-4 mb-4 text-[10px] text-zinc-500">
+                    <span className="flex items-center gap-1">
+                      <span className="w-3 h-3 rounded-sm bg-yellow-500" /> Minor (1-2)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-3 h-3 rounded-sm bg-orange-500" /> Moderate (3)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-3 h-3 rounded-sm bg-red-500" /> Critical (4-5)
+                    </span>
+                  </div>
+
+                  {/* Heatmap bars */}
+                  <div className="flex items-end gap-1 h-24 border-b border-zinc-800 pb-1">
+                    {frictionEvents
+                      .sort((a, b) => a.step - b.step)
+                      .map((event, i) => {
+                        const colors = getSeverityColor(event.severity);
+                        const heightPercent = (event.severity / 5) * 100;
+                        return (
+                          <div
+                            key={i}
+                            className="flex-1 flex flex-col items-center justify-end group relative"
+                          >
+                            <div
+                              className={`w-full min-w-[8px] max-w-[32px] rounded-t ${colors.bar} transition-all group-hover:opacity-80`}
+                              style={{ height: `${heightPercent}%` }}
+                            />
+                            {/* Tooltip */}
+                            <div className="absolute bottom-full mb-2 hidden group-hover:block z-20">
+                              <div className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-[10px] whitespace-nowrap shadow-lg">
+                                <span className={colors.text}>Severity {event.severity}</span>
+                                <span className="text-zinc-500"> at step {event.step}</span>
+                                <br />
+                                <span className="text-zinc-400">{event.category}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                  <div className="flex gap-1 mt-1">
+                    {frictionEvents
+                      .sort((a, b) => a.step - b.step)
+                      .map((event, i) => (
+                        <div key={i} className="flex-1 text-center text-[9px] text-zinc-600 font-mono">
+                          {event.step}
+                        </div>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Detailed friction events list */}
+              <Card className="bg-zinc-900 border-zinc-800">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Friction Events Detail</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {frictionEvents
+                      .sort((a, b) => b.severity - a.severity)
+                      .map((event, i) => {
+                        const colors = getSeverityColor(event.severity);
+                        return (
+                          <div key={i} className={`flex items-start gap-3 p-3 rounded border ${colors.bg} border-zinc-800`}>
+                            {/* Severity bar indicator */}
+                            <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                              <div className={`w-1.5 rounded-full ${colors.bar}`} style={{ height: `${event.severity * 6}px` }} />
+                              <span className={`text-[10px] font-mono font-bold ${colors.text}`}>
+                                {event.severity}
+                              </span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <span className="text-[10px] text-zinc-500 font-mono">Step {event.step}</span>
+                                <Badge variant="outline" className="text-[10px] text-zinc-400 border-zinc-700 px-1.5 py-0">
+                                  {event.category}
+                                </Badge>
+                                <span className={`text-[10px] ${colors.text}`}>{colors.label}</span>
+                              </div>
+                              <p className="text-sm text-zinc-300">{event.description}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </TabsContent>
 
         {/* Screenshots Tab */}
@@ -454,54 +671,16 @@ export default function SessionDetailPage() {
                 </CardContent>
               </Card>
 
-              {frictionEvents.length > 0 && (
-                <Card className="bg-zinc-900 border-zinc-800">
-                  <CardHeader>
-                    <CardTitle className="text-base">Friction Events ({frictionEvents.length})</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {frictionEvents
-                        .sort((a: { severity: number }, b: { severity: number }) => b.severity - a.severity)
-                        .map((event: { step: number; severity: number; category: string; description: string }, i: number) => (
-                          <div key={i} className="flex items-start gap-3 p-3 rounded bg-zinc-800/50">
-                            <Badge
-                              variant="outline"
-                              className={`text-xs flex-shrink-0 ${
-                                event.severity >= 4
-                                  ? "text-red-400 border-red-800"
-                                  : event.severity >= 3
-                                    ? "text-orange-400 border-orange-800"
-                                    : "text-yellow-400 border-yellow-800"
-                              }`}
-                            >
-                              {event.severity}/5
-                            </Badge>
-                            <div>
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-xs text-zinc-500">Step {event.step}</span>
-                                <Badge variant="outline" className="text-[10px] text-zinc-400 border-zinc-700">
-                                  {event.category}
-                                </Badge>
-                              </div>
-                              <p className="text-sm text-zinc-300">{event.description}</p>
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
               {score.aiReview && (
                 <Card className="bg-zinc-900 border-zinc-800">
                   <CardHeader>
                     <CardTitle className="text-base">AI Review</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <div className="prose prose-invert prose-sm max-w-none">
-                      <div dangerouslySetInnerHTML={{ __html: markdownToHtml(score.aiReview) }} />
-                    </div>
+                    <MarkdownRenderer
+                      content={score.aiReview}
+                      className="prose prose-invert prose-sm max-w-none"
+                    />
                   </CardContent>
                 </Card>
               )}
@@ -564,18 +743,4 @@ function MetricBox({
       </p>
     </div>
   );
-}
-
-function markdownToHtml(md: string): string {
-  return md
-    .replace(/^### (.*$)/gm, '<h3 class="text-lg font-semibold mt-4 mb-2 text-zinc-100">$1</h3>')
-    .replace(/^## (.*$)/gm, '<h2 class="text-xl font-bold mt-6 mb-3 text-zinc-100">$1</h2>')
-    .replace(/^# (.*$)/gm, '<h1 class="text-2xl font-bold mt-8 mb-4 text-zinc-100">$1</h1>')
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, '<code class="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300 text-xs">$1</code>')
-    .replace(/^- (.*$)/gm, '<li class="ml-4 text-zinc-300">&#x2022; $1</li>')
-    .replace(/^(\d+)\. (.*$)/gm, '<li class="ml-4 text-zinc-300">$1. $2</li>')
-    .replace(/\n\n/g, '<br class="my-2">')
-    .replace(/\n/g, "<br>");
 }

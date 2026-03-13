@@ -303,14 +303,21 @@ export default function ProductPage() {
             <h1 className="text-3xl font-bold tracking-tight">{product.name}</h1>
             <p className="text-zinc-400 mt-1">{product.url}</p>
           </div>
-          <Button
-            variant="ghost"
-            className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
-            onClick={handleDeleteProduct}
-            disabled={deletingProduct}
-          >
-            {deletingProduct ? "Deleting..." : "Delete Product"}
-          </Button>
+          <div className="flex gap-2">
+            {runs.length > 0 && (
+              <Link href={`/products/${productId}/analytics`}>
+                <Button variant="outline">Analytics</Button>
+              </Link>
+            )}
+            <Button
+              variant="ghost"
+              className="text-red-400 hover:text-red-300 hover:bg-red-900/20"
+              onClick={handleDeleteProduct}
+              disabled={deletingProduct}
+            >
+              {deletingProduct ? "Deleting..." : "Delete Product"}
+            </Button>
+          </div>
         </div>
       </div>
 
