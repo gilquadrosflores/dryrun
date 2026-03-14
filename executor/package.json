@@ -1,0 +1,17 @@
+{
+  "name": "dryrun-executor",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@google/genai": "^1.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250313.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^4.14.0"
+  }
+}

@@ -169,9 +169,12 @@ export default function SessionDetailPage() {
 
   const { session, score, report, persona, mission, plan } = data;
   const trace: TraceEntry[] = session.trace ? JSON.parse(session.trace) : [];
-  const screenshots: string[] = session.screenshots
+  const rawScreenshots: string[] = session.screenshots
     ? JSON.parse(session.screenshots)
     : [];
+  const screenshots: string[] = rawScreenshots.map((s) =>
+    s.startsWith("http") ? s : `/api/screenshots?key=${encodeURIComponent(s)}`
+  );
   const agentNotes: string[] = session.agentNotes
     ? JSON.parse(session.agentNotes)
     : [];

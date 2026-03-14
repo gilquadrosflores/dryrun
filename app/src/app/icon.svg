@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0a0a0a"/>
+  <g transform="translate(256,256)">
+    <!-- Outer ring: test cycle -->
+    <circle cx="0" cy="0" r="180" fill="none" stroke="#333" stroke-width="24"/>
+    <!-- Progress arc: ~270 degrees -->
+    <path d="M 0,-180 A 180,180 0 1,1 -127.28,127.28" fill="none" stroke="#22c55e" stroke-width="24" stroke-linecap="round"/>
+    <!-- Play/run triangle -->
+    <polygon points="-60,-90 -60,90 100,0" fill="#e5e5e5" opacity="0.9"/>
+  </g>
+</svg>

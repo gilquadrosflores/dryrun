@@ -1,14 +1,14 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
-let _client: GoogleGenerativeAI | null = null;
+let _client: GoogleGenAI | null = null;
 
-function getGeminiClient(): GoogleGenerativeAI {
+function getGeminiClient(): GoogleGenAI {
   if (!_client) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error("GEMINI_API_KEY is not set. Add it to .env.local");
     }
-    _client = new GoogleGenerativeAI(apiKey);
+    _client = new GoogleGenAI({ apiKey });
   }
   return _client;
 }
@@ -18,16 +18,16 @@ export async function generateJSON<T>(
   userPrompt: string
 ): Promise<T> {
   const client = getGeminiClient();
-  const model = client.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    systemInstruction: systemPrompt,
-    generationConfig: {
+  const result = await client.models.generateContent({
+    model: "gemini-3-flash-preview",
+    config: {
+      systemInstruction: systemPrompt,
       responseMimeType: "application/json",
     },
+    contents: userPrompt,
   });
 
-  const result = await model.generateContent(userPrompt);
-  const text = result.response.text();
+  const text = result.text ?? "";
 
   // Try direct parse first (responseMimeType should give clean JSON)
   try {
@@ -53,11 +53,12 @@ export async function generateText(
   userPrompt: string
 ): Promise<string> {
   const client = getGeminiClient();
-  const model = client.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    systemInstruction: systemPrompt,
+  const result = await client.models.generateContent({
+    model: "gemini-3-flash-preview",
+    config: {
+      systemInstruction: systemPrompt,
+    },
+    contents: userPrompt,
   });
-
-  const result = await model.generateContent(userPrompt);
-  return result.response.text();
+  return result.text ?? "";
 }

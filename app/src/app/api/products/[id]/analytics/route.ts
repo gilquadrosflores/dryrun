@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import {
   products,
   personas,
-  plans,
   runs,
   sessions,
   scores,
-  missions,
 } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -22,32 +20,41 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const db = getDb();
   const { id } = await params;
 
-  const product = db.select().from(products).where(eq(products.id, id)).get();
+  const product = await db.select().from(products).where(eq(products.id, id)).get();
   if (!product) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   // Get all runs for this product
-  const productRuns = db
+  const productRuns = await db
     .select()
     .from(runs)
     .where(eq(runs.productId, id))
     .all();
 
   // Get all sessions across all runs
-  const allSessions = productRuns.flatMap((run) =>
-    db.select().from(sessions).where(eq(sessions.runId, run.id)).all()
-  );
+  const allSessions = (
+    await Promise.all(
+      productRuns.map((run) =>
+        db.select().from(sessions).where(eq(sessions.runId, run.id)).all()
+      )
+    )
+  ).flat();
 
   // Get all scores
-  const allScores = allSessions
-    .map((s) => db.select().from(scores).where(eq(scores.sessionId, s.id)).get())
-    .filter(Boolean);
+  const allScores = (
+    await Promise.all(
+      allSessions.map((s) =>
+        db.select().from(scores).where(eq(scores.sessionId, s.id)).get()
+      )
+    )
+  ).filter(Boolean);
 
   // Get all personas
-  const productPersonas = db
+  const productPersonas = await db
     .select()
     .from(personas)
     .where(eq(personas.productId, id))

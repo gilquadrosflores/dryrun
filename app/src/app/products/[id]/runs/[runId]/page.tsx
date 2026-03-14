@@ -564,9 +564,12 @@ export default function RunDetailPage() {
         <h2 className="text-xl font-bold">Sessions</h2>
 
         {sessionList.map((session) => {
-          const screenshots = session.screenshots
+          const rawScreenshots: string[] = session.screenshots
             ? JSON.parse(session.screenshots)
             : [];
+          const screenshots = rawScreenshots.map((s: string) =>
+            s.startsWith("http") ? s : `/api/screenshots?key=${encodeURIComponent(s)}`
+          );
           const persona = personaMap[session.personaId];
           const detail = sessionDetails[session.id];
           const events = sessionFrictionMap[session.id] || [];

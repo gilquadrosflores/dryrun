@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { plans, personas, missions, products } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { generatePlans } from "@/lib/ai/plans";
 
 export async function GET(req: Request) {
+  const db = getDb();
   const { searchParams } = new URL(req.url);
   const productId = searchParams.get("productId");
   const personaId = searchParams.get("personaId");
 
   if (personaId) {
-    const result = db
+    const result = await db
       .select()
       .from(plans)
       .where(eq(plans.personaId, personaId))
@@ -20,15 +21,14 @@ export async function GET(req: Request) {
   }
 
   if (productId) {
-    // Get all plans for personas of this product
-    const productPersonas = db
+    const productPersonas = await db
       .select()
       .from(personas)
       .where(eq(personas.productId, productId))
       .all();
     const personaIds = productPersonas.map((p) => p.id);
 
-    const allPlans = db.select().from(plans).all();
+    const allPlans = await db.select().from(plans).all();
     const filtered = allPlans.filter((p) => personaIds.includes(p.personaId));
     return NextResponse.json(filtered);
   }
@@ -40,6 +40,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const db = getDb();
   const body = await req.json();
   const { personaId, count = 2 } = body;
 
@@ -50,7 +51,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const persona = db
+  const persona = await db
     .select()
     .from(personas)
     .where(eq(personas.id, personaId))
@@ -63,7 +64,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const product = db
+  const product = await db
     .select()
     .from(products)
     .where(eq(products.id, persona.productId))
@@ -100,42 +101,38 @@ export async function POST(req: Request) {
   );
 
   const now = Math.floor(Date.now() / 1000);
-  const created = generated.map((p) => {
+  const created = [];
+  for (const p of generated) {
     const planId = uuid();
     const missionId = uuid();
 
-    // Create mission
-    db.insert(missions)
-      .values({
-        id: missionId,
-        productId: product!.id,
-        description: p.missionDescription,
-        entryPoint: p.entryPoint,
-        createdAt: now,
-      })
-      .run();
+    await db.insert(missions).values({
+      id: missionId,
+      productId: product.id,
+      description: p.missionDescription,
+      entryPoint: p.entryPoint,
+      createdAt: now,
+    });
 
-    // Create plan
-    db.insert(plans)
-      .values({
-        id: planId,
-        personaId,
-        missionId,
-        scenarioDimensions: JSON.stringify(p.scenarioDimensions),
-        teacherState: p.teacherState,
-        steps: JSON.stringify(p.steps),
-        approved: 0,
-        createdAt: now,
-      })
-      .run();
+    await db.insert(plans).values({
+      id: planId,
+      personaId,
+      missionId,
+      scenarioDimensions: JSON.stringify(p.scenarioDimensions),
+      teacherState: p.teacherState,
+      steps: JSON.stringify(p.steps),
+      approved: 0,
+      createdAt: now,
+    });
 
-    return { id: planId, missionId, ...p, personaId, createdAt: now };
-  });
+    created.push({ id: planId, missionId, ...p, personaId, createdAt: now });
+  }
 
   return NextResponse.json(created, { status: 201 });
 }
 
 export async function PATCH(req: Request) {
+  const db = getDb();
   const body = await req.json();
   const { planId, approved } = body;
 
@@ -146,10 +143,9 @@ export async function PATCH(req: Request) {
     );
   }
 
-  db.update(plans)
+  await db.update(plans)
     .set({ approved: approved ? 1 : 0 })
-    .where(eq(plans.id, planId))
-    .run();
+    .where(eq(plans.id, planId));
 
   return NextResponse.json({ success: true });
 }

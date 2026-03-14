@@ -1,0 +1,19 @@
+name = "dryrun-executor"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat_v2"]
+account_id = "7fa405517686bca61471b3c57f0012bd"
+
+[[workflows]]
+name = "browser-session-workflow"
+binding = "BROWSER_SESSION_WORKFLOW"
+class_name = "BrowserSessionWorkflow"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dryrun-db"
+database_id = "a3a14683-d09f-44b5-8a3f-111d285551b0"
+
+[[r2_buckets]]
+binding = "SCREENSHOTS"
+bucket_name = "dryrun-screenshots"
