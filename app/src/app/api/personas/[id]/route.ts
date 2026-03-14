@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { personas, plans, missions } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -7,9 +7,10 @@ export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const db = getDb();
   const { id } = await params;
 
-  const persona = db
+  const persona = await db
     .select()
     .from(personas)
     .where(eq(personas.id, id))
@@ -20,18 +21,18 @@ export async function DELETE(
   }
 
   // Delete associated plans and missions
-  const personaPlans = db
+  const personaPlans = await db
     .select()
     .from(plans)
     .where(eq(plans.personaId, id))
     .all();
 
   for (const plan of personaPlans) {
-    db.delete(missions).where(eq(missions.id, plan.missionId)).run();
-    db.delete(plans).where(eq(plans.id, plan.id)).run();
+    await db.delete(missions).where(eq(missions.id, plan.missionId));
+    await db.delete(plans).where(eq(plans.id, plan.id));
   }
 
-  db.delete(personas).where(eq(personas.id, id)).run();
+  await db.delete(personas).where(eq(personas.id, id));
 
   return NextResponse.json({ success: true });
 }

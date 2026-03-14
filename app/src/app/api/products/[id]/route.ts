@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import {
   products,
   personas,
@@ -16,8 +16,9 @@ export async function GET(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const db = getDb();
   const { id } = await params;
-  const product = db.select().from(products).where(eq(products.id, id)).get();
+  const product = await db.select().from(products).where(eq(products.id, id)).get();
   if (!product) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -28,36 +29,37 @@ export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const db = getDb();
   const { id } = await params;
 
-  const product = db.select().from(products).where(eq(products.id, id)).get();
+  const product = await db.select().from(products).where(eq(products.id, id)).get();
   if (!product) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   // Delete all related data in order
-  const productRuns = db.select().from(runs).where(eq(runs.productId, id)).all();
+  const productRuns = await db.select().from(runs).where(eq(runs.productId, id)).all();
   for (const run of productRuns) {
-    const runSessions = db.select().from(sessions).where(eq(sessions.runId, run.id)).all();
+    const runSessions = await db.select().from(sessions).where(eq(sessions.runId, run.id)).all();
     for (const session of runSessions) {
-      db.delete(scores).where(eq(scores.sessionId, session.id)).run();
-      db.delete(reports).where(eq(reports.sessionId, session.id)).run();
+      await db.delete(scores).where(eq(scores.sessionId, session.id));
+      await db.delete(reports).where(eq(reports.sessionId, session.id));
     }
-    db.delete(sessions).where(eq(sessions.runId, run.id)).run();
+    await db.delete(sessions).where(eq(sessions.runId, run.id));
   }
-  db.delete(runs).where(eq(runs.productId, id)).run();
+  await db.delete(runs).where(eq(runs.productId, id));
 
-  const productPersonas = db.select().from(personas).where(eq(personas.productId, id)).all();
+  const productPersonas = await db.select().from(personas).where(eq(personas.productId, id)).all();
   for (const persona of productPersonas) {
-    const personaPlans = db.select().from(plans).where(eq(plans.personaId, persona.id)).all();
+    const personaPlans = await db.select().from(plans).where(eq(plans.personaId, persona.id)).all();
     for (const plan of personaPlans) {
-      db.delete(missions).where(eq(missions.id, plan.missionId)).run();
+      await db.delete(missions).where(eq(missions.id, plan.missionId));
     }
-    db.delete(plans).where(eq(plans.personaId, persona.id)).run();
+    await db.delete(plans).where(eq(plans.personaId, persona.id));
   }
-  db.delete(personas).where(eq(personas.productId, id)).run();
-  db.delete(missions).where(eq(missions.productId, id)).run();
-  db.delete(products).where(eq(products.id, id)).run();
+  await db.delete(personas).where(eq(personas.productId, id));
+  await db.delete(missions).where(eq(missions.productId, id));
+  await db.delete(products).where(eq(products.id, id));
 
   return NextResponse.json({ success: true });
 }

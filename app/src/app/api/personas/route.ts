@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+import { getDb } from "@/lib/db";
 import { personas, products } from "@/lib/db/schema";
 import { eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { generatePersonas } from "@/lib/ai/personas";
 
 export async function GET(req: Request) {
+  const db = getDb();
   const { searchParams } = new URL(req.url);
   const productId = searchParams.get("productId");
 
@@ -16,7 +17,7 @@ export async function GET(req: Request) {
     );
   }
 
-  const result = db
+  const result = await db
     .select()
     .from(personas)
     .where(eq(personas.productId, productId))
@@ -25,6 +26,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const db = getDb();
   const body = await req.json();
   const { productId, count = 5 } = body;
 
@@ -35,7 +37,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const product = db
+  const product = await db
     .select()
     .from(products)
     .where(eq(products.id, productId))
@@ -65,22 +67,21 @@ export async function POST(req: Request) {
   );
 
   const now = Math.floor(Date.now() / 1000);
-  const created = generated.map((p) => {
+  const created = [];
+  for (const p of generated) {
     const id = uuid();
-    db.insert(personas)
-      .values({
-        id,
-        productId,
-        name: p.name,
-        role: p.role,
-        behavioralFields: JSON.stringify(p.behavioralFields),
-        evidenceSources: null,
-        validated: 0,
-        createdAt: now,
-      })
-      .run();
-    return { id, ...p, productId, createdAt: now };
-  });
+    await db.insert(personas).values({
+      id,
+      productId,
+      name: p.name,
+      role: p.role,
+      behavioralFields: JSON.stringify(p.behavioralFields),
+      evidenceSources: null,
+      validated: 0,
+      createdAt: now,
+    });
+    created.push({ id, ...p, productId, createdAt: now });
+  }
 
   return NextResponse.json(created, { status: 201 });
 }

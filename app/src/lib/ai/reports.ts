@@ -1,5 +1,19 @@
 import { generateText } from "./client";
-import type { AIScoreResult } from "./scoring";
+
+interface AIScoreResult {
+  taskCompletion: string;
+  qualitativeReview: string;
+  frictionEvents: Array<{
+    severity: number;
+    step: number;
+    description: string;
+    category: string;
+  }>;
+  mentalModelMismatches: string[];
+  missingFeatures: string[];
+  mostLikelyChurnReason: string;
+  highestImpactChange: string;
+}
 
 interface RuleMetrics {
   deadEndCount: number;
