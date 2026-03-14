@@ -1,36 +1,27 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Dryrun — App
 
-## Getting Started
+Next.js 16 frontend deployed to Cloudflare Workers via [OpenNext](https://opennext.js.org/cloudflare).
 
-First, run the development server:
+See the [root README](../README.md) for full project documentation.
+
+## Scripts
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev              # Local Next.js dev server (port 3000)
+npm run build            # Standard Next.js build
+npm run build:worker     # Build for Cloudflare Workers (OpenNext)
+npm run preview          # Local Cloudflare Workers preview
+npm run deploy           # Build + deploy to Cloudflare
+npm run db:migrate       # Run D1 migrations locally
+npm run db:migrate:remote # Run D1 migrations on production
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Cloudflare Bindings
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Configured in `wrangler.toml`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Binding | Type | Purpose |
+|---------|------|---------|
+| `DB` | D1 Database | SQLite database (dryrun-db) |
+| `SCREENSHOTS` | R2 Bucket | Screenshot storage (dryrun-screenshots) |
+| `EXECUTOR` | Service Binding | Worker-to-worker RPC to dryrun-executor |
