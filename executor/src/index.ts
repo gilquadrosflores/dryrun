@@ -5,6 +5,7 @@ import type { WorkflowEvent } from "cloudflare:workers";
 
 interface Env {
   DB: D1Database;
+  SCREENSHOTS: R2Bucket;
   BROWSER_SESSION_WORKFLOW: Workflow;
   BROWSERBASE_API_KEY: string;
   BROWSERBASE_PROJECT_ID: string;
@@ -56,6 +57,7 @@ interface AgentResult {
   abandonmentPoint: string | null;
   agentNotes: string[];
   durationSeconds: number;
+  screenshots: string[];
 }
 
 interface AIScoreResult {
@@ -82,15 +84,36 @@ const ARCHETYPE_OVERRIDES: Record<string, string> = {
 };
 
 async function parseSSEStream(
-  body: ReadableStream<Uint8Array>
+  body: ReadableStream<Uint8Array>,
+  timeoutMs?: number
 ): Promise<{ result: unknown; logs: string[] }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   const logs: string[] = [];
+  // Per-read timeout: if no data arrives within 2 minutes, the stream is dead
+  const readTimeoutMs = Math.min(timeoutMs ?? 120_000, 120_000);
+
+  function readWithTimeout(): Promise<ReadableStreamReadResult<Uint8Array>> {
+    return Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => {
+          reader.cancel();
+          reject(new Error(`SSE stream timed out (no data for ${readTimeoutMs / 1000}s)`));
+        }, readTimeoutMs)
+      ),
+    ]);
+  }
+
+  const deadline = timeoutMs ? Date.now() + timeoutMs : null;
 
   while (true) {
-    const { value, done } = await reader.read();
+    if (deadline && Date.now() > deadline) {
+      reader.cancel();
+      throw new Error(`SSE stream exceeded total timeout of ${Math.round(timeoutMs! / 1000)}s`);
+    }
+    const { value, done } = await readWithTimeout();
     if (done && !buffer) break;
     buffer += decoder.decode(value, { stream: !done });
     const parts = buffer.split("\n\n");
@@ -159,6 +182,7 @@ async function geminiJSON<T>(apiKey: string, systemPrompt: string, userPrompt: s
         contents: [{ parts: [{ text: userPrompt }] }],
         generationConfig: { responseMimeType: "application/json" },
       }),
+      signal: AbortSignal.timeout(60000),
     }
   );
   if (!resp.ok) throw new Error(`Gemini API error: ${resp.status}`);
@@ -186,6 +210,7 @@ async function geminiText(apiKey: string, systemPrompt: string, userPrompt: stri
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ parts: [{ text: userPrompt }] }],
       }),
+      signal: AbortSignal.timeout(60000),
     }
   );
   if (!resp.ok) throw new Error(`Gemini API error: ${resp.status}`);
@@ -289,11 +314,88 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
         method: "POST",
         headers: makeHeaders(),
         body: JSON.stringify({ url: startUrl }),
+        signal: AbortSignal.timeout(30000),
       });
 
       if (!resp.ok) throw new Error(`Navigate failed: ${resp.status}`);
-      await parseSSEStream(resp.body!);
+      await parseSSEStream(resp.body!, 30000);
     });
+
+    // Helper: capture screenshot via Stagehand API and upload to R2
+    // Wraps the entire operation in a hard timeout to prevent hanging
+    const captureScreenshot = async (label: string, index: number): Promise<string | null> => {
+      const SCREENSHOT_TIMEOUT = 20_000;
+      try {
+        return await Promise.race([
+          (async (): Promise<string | null> => {
+            const controller = new AbortController();
+            const resp = await fetch(`${STAGEHAND_API_BASE}/sessions/${bbSessionId}/screenshot`, {
+              method: "POST",
+              headers: makeHeaders(),
+              signal: controller.signal,
+            });
+            console.log(`[workflow] Screenshot ${label}: status=${resp.status} ct=${resp.headers.get("content-type")}`);
+            if (!resp.ok) return null;
+
+            // Read entire response body as text (don't use SSE parsing — avoid hangs)
+            const bodyText = await resp.text();
+            console.log(`[workflow] Screenshot ${label}: body length=${bodyText.length}, preview=${bodyText.slice(0, 200)}`);
+
+            // Try to extract base64 from any format
+            let base64: string | null = null;
+
+            // If body IS the base64 (raw data)
+            if (bodyText.startsWith("data:image/") || bodyText.match(/^[A-Za-z0-9+/=]{100,}/)) {
+              base64 = bodyText;
+            } else {
+              // Try parsing SSE events for the result
+              const events = bodyText.split("\n\n").filter(p => p.startsWith("data: "));
+              for (const evt of events) {
+                try {
+                  const parsed = JSON.parse(evt.slice(6));
+                  if (parsed.type === "system" && parsed.data?.status === "finished") {
+                    const result = parsed.data.result;
+                    if (typeof result === "string") base64 = result;
+                    else if (result?.screenshot) base64 = result.screenshot;
+                    else if (result?.data) base64 = result.data;
+                    else console.log(`[workflow] Screenshot ${label}: result keys=${Object.keys(result || {}).join(",")}`);
+                    break;
+                  }
+                } catch { /* skip non-JSON lines */ }
+              }
+              // Try as plain JSON
+              if (!base64) {
+                try {
+                  const json = JSON.parse(bodyText) as Record<string, unknown>;
+                  base64 = (json.screenshot || json.data || json.image) as string | null;
+                } catch { /* not JSON */ }
+              }
+            }
+
+            if (!base64) {
+              console.log(`[workflow] Screenshot ${label}: could not extract image data`);
+              return null;
+            }
+
+            const raw = String(base64).replace(/^data:image\/\w+;base64,/, "");
+            const bytes = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+            const key = `runs/${runId}/sessions/${sessionId}/${String(index).padStart(2, "0")}-${label}.png`;
+            await this.env.SCREENSHOTS.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
+            console.log(`[workflow] Screenshot uploaded: ${key} (${bytes.length} bytes)`);
+            return key;
+          })(),
+          new Promise<null>((resolve) => {
+            setTimeout(() => {
+              console.log(`[workflow] Screenshot ${label}: hard timeout after ${SCREENSHOT_TIMEOUT / 1000}s`);
+              resolve(null);
+            }, SCREENSHOT_TIMEOUT);
+          }),
+        ]);
+      } catch (error) {
+        console.log(`[workflow] Screenshot ${label} error:`, error instanceof Error ? error.message : error);
+        return null;
+      }
+    };
 
     // Step 3: Execute the agent — this is the long-running step (mostly I/O wait)
     // Timeout after hardTimeoutSeconds to prevent hanging indefinitely
@@ -301,11 +403,17 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
       const startTime = Date.now();
       const trace: TraceEntry[] = [];
       const agentNotes: string[] = [];
+      const screenshots: string[] = [];
       let goalAchieved: "yes" | "partial" | "no" = "no";
       let abandonmentPoint: string | null = null;
 
       trace.push({ timestamp: Date.now(), action: "session_started", result: bbSessionId, note: "Stagehand API session" });
       trace.push({ timestamp: Date.now(), action: "navigate", target: plan.entryPoint, result: "navigated" });
+
+      // Screenshot 1: initial page after navigation
+      const startScreenshot = await captureScreenshot("start", 1);
+      if (startScreenshot) screenshots.push(startScreenshot);
+
       trace.push({ timestamp: Date.now(), action: "agent_start", result: "running", note: plan.missionDescription });
 
       try {
@@ -339,7 +447,7 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
           throw new Error(`agentExecute failed ${resp.status}: ${errText.slice(0, 300)}`);
         }
 
-        const { result, logs } = await parseSSEStream(resp.body!);
+        const { result, logs } = await parseSSEStream(resp.body!, hardTimeoutSeconds * 1000);
 
         for (const log of logs.slice(0, 30)) {
           trace.push({ timestamp: Date.now(), action: "agent_log", result: log.slice(0, 200) });
@@ -356,11 +464,19 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         const summary = resultObj?.output || resultObj?.message || logs.slice(-2).join("; ");
         if (summary) agentNotes.push(`Agent result: ${String(summary).slice(0, 500)}`);
         trace.push({ timestamp: Date.now(), action: "agent_complete", result: goalAchieved, note: String(summary || "").slice(0, 200) });
+
+        // Screenshot 2: final state after agent execution
+        const endScreenshot = await captureScreenshot("end", 2);
+        if (endScreenshot) screenshots.push(endScreenshot);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         trace.push({ timestamp: Date.now(), action: "fatal_error", result: errorMsg, note: "Session crashed" });
         agentNotes.push(`Fatal error: ${errorMsg}`);
         abandonmentPoint = errorMsg.slice(0, 200);
+
+        // Screenshot on error: capture the error state
+        const errorScreenshot = await captureScreenshot("error", 2);
+        if (errorScreenshot) screenshots.push(errorScreenshot);
       }
 
       return {
@@ -368,6 +484,7 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         goalAchieved,
         abandonmentPoint,
         agentNotes,
+        screenshots,
         durationSeconds: Math.round((Date.now() - startTime) / 1000),
       } satisfies AgentResult;
     });
@@ -378,6 +495,7 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         await fetch(`${STAGEHAND_API_BASE}/sessions/${bbSessionId}/end`, {
           method: "POST",
           headers: makeHeaders(),
+          signal: AbortSignal.timeout(15000),
         });
       } catch {
         // ignore close errors
@@ -396,7 +514,7 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         agentResult.abandonmentPoint,
         agentResult.durationSeconds,
         JSON.stringify(agentResult.trace),
-        JSON.stringify([]),
+        JSON.stringify(agentResult.screenshots),
         JSON.stringify(agentResult.agentNotes),
         now,
         sessionId,
@@ -462,14 +580,14 @@ Return JSON:
       ).bind(
         scoreId,
         sessionId,
-        aiScore?.taskCompletion || agentResult.goalAchieved,
-        metrics.timeToFirstActionSeconds,
-        metrics.deadEndCount,
-        metrics.recoveryCount,
-        metrics.helpSeekingEvents,
-        metrics.confidenceDrops,
-        aiScore ? JSON.stringify(aiScore.frictionEvents) : null,
-        aiScore?.qualitativeReview || null,
+        aiScore?.taskCompletion ?? agentResult.goalAchieved,
+        metrics.timeToFirstActionSeconds ?? null,
+        metrics.deadEndCount ?? 0,
+        metrics.recoveryCount ?? 0,
+        metrics.helpSeekingEvents ?? 0,
+        metrics.confidenceDrops ?? 0,
+        aiScore?.frictionEvents ? JSON.stringify(aiScore.frictionEvents) : null,
+        aiScore?.qualitativeReview ?? null,
         now,
       ).run();
 

@@ -9,7 +9,7 @@ import {
   missions,
   products,
 } from "@/lib/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 
 export async function GET(req: Request) {
@@ -22,11 +22,12 @@ export async function GET(req: Request) {
       .select()
       .from(runs)
       .where(eq(runs.productId, productId))
+      .orderBy(desc(runs.createdAt))
       .all();
     return NextResponse.json(result);
   }
 
-  const allRuns = await db.select().from(runs).all();
+  const allRuns = await db.select().from(runs).orderBy(desc(runs.createdAt)).all();
   return NextResponse.json(allRuns);
 }
 

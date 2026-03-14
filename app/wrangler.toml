@@ -14,3 +14,7 @@ service = "dryrun-executor"
 binding = "DB"
 database_name = "dryrun-db"
 database_id = "a3a14683-d09f-44b5-8a3f-111d285551b0"
+
+[[r2_buckets]]
+binding = "SCREENSHOTS"
+bucket_name = "dryrun-screenshots"
