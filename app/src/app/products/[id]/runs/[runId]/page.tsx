@@ -86,7 +86,7 @@ const GOAL_BADGE_STYLES: Record<string, string> = {
   no: "text-[#EF4444] border-[#EF4444]/30 bg-[#EF4444]/10",
 };
 
-function parseFrictionEvents(raw: string | null | undefined): FrictionEvent[] {
+function parseJsonArray<T>(raw: string | null | undefined): T[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -95,6 +95,9 @@ function parseFrictionEvents(raw: string | null | undefined): FrictionEvent[] {
     return [];
   }
 }
+
+const parseFrictionEvents = (raw: string | null | undefined) =>
+  parseJsonArray<FrictionEvent>(raw);
 
 export default function RunDetailPage() {
   const params = useParams();
@@ -167,11 +170,10 @@ export default function RunDetailPage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => {
-      fetchData();
-    }, 5000);
+    if (run?.status === "complete") return;
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchData, run?.status]);
 
   const allFrictionEvents: Array<FrictionEvent & { sessionId: string }> = [];
   const sessionFrictionMap: Record<string, FrictionEvent[]> = {};
@@ -564,9 +566,7 @@ export default function RunDetailPage() {
         <h2 className="text-xl font-bold">Sessions</h2>
 
         {sessionList.map((session) => {
-          const rawScreenshots: string[] = session.screenshots
-            ? JSON.parse(session.screenshots)
-            : [];
+          const rawScreenshots = parseJsonArray<string>(session.screenshots);
           const persona = personaMap[session.personaId];
           const detail = sessionDetails[session.id];
           const events = sessionFrictionMap[session.id] || [];

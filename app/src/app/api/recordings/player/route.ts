@@ -116,7 +116,6 @@ export async function GET(req: Request) {
       background: #111;
       border-top: 1px solid #1a1a1a;
       padding: 8px 14px 10px;
-      display: flex;
       flex-direction: column;
       gap: 8px;
       display: none;
@@ -361,11 +360,11 @@ export async function GET(req: Request) {
       }, 400);
 
       // ── Time tracking ──
-      var isPlaying   = false;
-      var startWall   = 0;
-      var startOffset = 0;
-      var curOffset   = 0;
+      var isPlaying    = false;
+      var startWall    = 0;
+      var curOffset    = 0;
       var raf;
+      var pendingSeekX = null;
 
       function getCur() {
         if (!isPlaying) return curOffset;
@@ -380,13 +379,16 @@ export async function GET(req: Request) {
         timeCur.textContent = fmt(c);
       }
 
-      function tick() { updateUI(); if (isPlaying) raf = requestAnimationFrame(tick); }
+      function tick() {
+        if (pendingSeekX !== null) { seek(pendingSeekX); pendingSeekX = null; }
+        updateUI();
+        if (isPlaying) raf = requestAnimationFrame(tick);
+      }
 
       function play(fromOffset) {
         if (fromOffset !== undefined) curOffset = fromOffset;
-        startWall   = Date.now();
-        startOffset = curOffset;
-        isPlaying   = true;
+        startWall  = Date.now();
+        isPlaying  = true;
         btnPlay.textContent = '⏸';
         replayer.play(curOffset);
         cancelAnimationFrame(raf);
@@ -403,19 +405,9 @@ export async function GET(req: Request) {
       }
 
       replayer.on('finish', function () {
+        pause();
         curOffset = 0;
-        isPlaying = false;
-        btnPlay.textContent = '▶';
-        cancelAnimationFrame(raf);
         updateUI();
-      });
-
-      // Track real event timestamps for accurate time display
-      var startTs = meta.startTime;
-      replayer.on('event-cast', function (e) {
-        if (isPlaying && e && e.timestamp) {
-          curOffset = e.timestamp - startTs;
-        }
       });
 
       // ── Controls ──
@@ -439,9 +431,15 @@ export async function GET(req: Request) {
       }
 
       var dragging = false;
-      progress.addEventListener('mousedown', function (e) { dragging = true; seek(e.clientX); });
-      document.addEventListener('mousemove', function (e) { if (dragging) seek(e.clientX); });
-      document.addEventListener('mouseup', function ()  { dragging = false; });
+      progress.addEventListener('mousedown', function (e) {
+        dragging = true;
+        seek(e.clientX);
+        if (!isPlaying) raf = requestAnimationFrame(tick); // ensure RAF runs while paused+dragging
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (dragging) pendingSeekX = e.clientX; // batched; drained in tick()
+      });
+      document.addEventListener('mouseup', function () { dragging = false; pendingSeekX = null; });
 
       // Speed
       document.querySelectorAll('.s-btn').forEach(function (btn) {
@@ -473,7 +471,7 @@ export async function GET(req: Request) {
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "public, max-age=3600",
     },
   });
 }

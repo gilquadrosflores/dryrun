@@ -10,6 +10,8 @@ export function SessionRecording({ sessionId }: SessionRecordingProps) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
 
+  const isVisible = isLoaded && !hasError;
+
   return (
     <div className="flex flex-col items-center gap-3 w-full">
       {!isLoaded && !hasError && (
@@ -33,12 +35,11 @@ export function SessionRecording({ sessionId }: SessionRecordingProps) {
       )}
       <iframe
         src={`/api/recordings/player?sessionId=${sessionId}`}
-        className={`w-full bg-[#0a0a0a] rounded-lg ${isLoaded && !hasError ? "" : "h-0 overflow-hidden"}`}
-        style={isLoaded && !hasError ? { aspectRatio: "16/10", border: "none", overflow: "hidden" } : { border: "none" }}
+        className={`w-full bg-[#0a0a0a] rounded-lg ${!isVisible && "h-0 overflow-hidden"}`}
+        style={isVisible ? { aspectRatio: "16/10", border: "none", overflow: "hidden" } : { border: "none" }}
         onLoad={() => setIsLoaded(true)}
         onError={() => setHasError(true)}
         sandbox="allow-scripts allow-same-origin"
-        scrolling="no"
       />
     </div>
   );

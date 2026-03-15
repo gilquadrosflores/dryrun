@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { getR2Bucket } from "@/lib/utils";
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
@@ -9,11 +9,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "key parameter required" }, { status: 400 });
   }
 
-  const { env } = getCloudflareContext();
-  const bucket = (env as unknown as Record<string, unknown>).SCREENSHOTS as
-    | { get: (key: string) => Promise<{ body: ReadableStream; httpMetadata?: { contentType?: string } } | null> }
-    | undefined;
-
+  const bucket = getR2Bucket();
   if (!bucket) {
     return NextResponse.json({ error: "Screenshots storage not configured" }, { status: 500 });
   }
