@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { SessionRecording } from "@/components/session-recording";
 import Link from "next/link";
 
 interface SessionData {
@@ -58,6 +59,8 @@ interface TraceEntry {
   target?: string;
   result?: string;
   note?: string;
+  pageUrl?: string;
+  durationMs?: number;
 }
 
 interface FrictionEvent {
@@ -68,11 +71,31 @@ interface FrictionEvent {
 }
 
 const ACTION_COLORS: Record<string, string> = {
+  // Navigation actions
   navigate: "text-blue-400 border-blue-800 bg-blue-950/30",
+  go_back: "text-blue-400 border-blue-800 bg-blue-950/30",
   page_loaded: "text-blue-400 border-blue-800 bg-blue-950/30",
+  // Interaction actions
+  click: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  fill_form: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  type: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  keyboard: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  scroll: "text-teal-400 border-teal-800 bg-teal-950/30",
+  drag: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  long_press: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  search: "text-cyan-400 border-cyan-800 bg-cyan-950/30",
+  // Observation actions
   observe: "text-purple-400 border-purple-800 bg-purple-950/30",
+  read_page: "text-purple-400 border-purple-800 bg-purple-950/30",
   plan: "text-cyan-400 border-cyan-800 bg-cyan-950/30",
+  wait: "text-[#555] border-[#333] bg-[#111]/30",
+  // Legacy/compatibility
   act: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  // Status actions
+  session_started: "text-[#555] border-[#333] bg-[#111]/30",
+  agent_start: "text-cyan-400 border-cyan-800 bg-cyan-950/30",
+  agent_complete: "text-[#4ADE80] border-[#4ADE80]/30 bg-[#4ADE80]/10",
+  agent_log: "text-[#555] border-[#333] bg-[#111]/30",
   error: "text-[#EF4444] border-[#EF4444]/30 bg-[#EF4444]/10",
   fatal_error: "text-[#EF4444] border-[#EF4444]/30 bg-[#EF4444]/10",
   abandon: "text-[#FBBF24] border-[#FBBF24]/30 bg-[#FBBF24]/10",
@@ -84,10 +107,25 @@ const ACTION_COLORS: Record<string, string> = {
 
 const ACTION_ICONS: Record<string, string> = {
   navigate: "\u2192",
+  go_back: "\u2190",
   page_loaded: "\u25CB",
+  click: "\u25B6",
+  fill_form: "\u270E",
+  type: "\u270E",
+  keyboard: "\u2328",
+  scroll: "\u2195",
+  drag: "\u2922",
+  long_press: "\u25CF",
+  search: "\u2315",
   observe: "\u25C9",
+  read_page: "\u25C9",
   plan: "\u2318",
+  wait: "\u23F3",
   act: "\u25B6",
+  session_started: "\u25CB",
+  agent_start: "\u25B7",
+  agent_complete: "\u2713",
+  agent_log: "\u2022",
   error: "\u2717",
   fatal_error: "\u2717",
   abandon: "\u23F9",
@@ -172,9 +210,9 @@ export default function SessionDetailPage() {
   const rawScreenshots: string[] = session.screenshots
     ? JSON.parse(session.screenshots)
     : [];
-  const screenshots: string[] = rawScreenshots.map((s) =>
-    s.startsWith("http") ? s : `/api/screenshots?key=${encodeURIComponent(s)}`
-  );
+  // Check if we have a recording in R2 or a Browserbase replay URL
+  const hasRecording = rawScreenshots.some((s) => s.startsWith("r2://recordings/"));
+  const replayUrl = rawScreenshots.find((s) => s.startsWith("https://www.browserbase.com/sessions/")) || null;
   const agentNotes: string[] = session.agentNotes
     ? JSON.parse(session.agentNotes)
     : [];
@@ -190,6 +228,12 @@ export default function SessionDetailPage() {
   };
 
   const getTimeDelta = (i: number): string => {
+    // Prefer durationMs from structured actions (actual time the action took)
+    if (trace[i]?.durationMs) {
+      const ms = trace[i].durationMs!;
+      if (ms < 1000) return `${ms}ms`;
+      return `${(ms / 1000).toFixed(1)}s`;
+    }
     if (i === 0 || !trace[i - 1]) return "-";
     const delta = trace[i].timestamp - trace[i - 1].timestamp;
     if (delta < 1000) return `${delta}ms`;
@@ -236,11 +280,18 @@ export default function SessionDetailPage() {
                 {session.status}
               </Badge>
             </div>
-            {plan && (
-              <p className="text-[#555] text-sm italic max-w-md truncate">
-                &ldquo;{plan.teacherState}&rdquo;
-              </p>
-            )}
+            <div className="flex items-center gap-3">
+              {plan && (
+                <p className="text-[#555] text-sm italic max-w-md truncate">
+                  &ldquo;{plan.teacherState}&rdquo;
+                </p>
+              )}
+              {hasRecording && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#E8FF00]/10 border border-[#E8FF00]/30 text-[#E8FF00] text-xs font-medium flex-shrink-0">
+                  &#x25B6; Recording available
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -362,10 +413,10 @@ export default function SessionDetailPage() {
             Friction ({frictionEvents.length})
           </TabsTrigger>
           <TabsTrigger
-            value="screenshots"
+            value="recording"
             className="rounded-none border-b-2 border-transparent data-[state=active]:border-[#E8FF00] data-[state=active]:bg-transparent data-[state=active]:text-[#E8FF00] text-[#555] px-4 py-2"
           >
-            Screenshots ({screenshots.length})
+            Recording {hasRecording ? "✓" : ""}
           </TabsTrigger>
           <TabsTrigger
             value="scores"
@@ -470,7 +521,7 @@ export default function SessionDetailPage() {
 
                   const colorClass = ACTION_COLORS[entry.action] || "text-[#555] border-[#333]";
                   const isExpanded = expandedRows.has(i);
-                  const hasDetails = !!(entry.target || entry.note);
+                  const hasDetails = !!(entry.target || entry.note || entry.pageUrl);
                   const icon = ACTION_ICONS[entry.action] || "\u2022";
 
                   return (
@@ -522,7 +573,10 @@ export default function SessionDetailPage() {
                               <p className="text-[#888] text-xs">{entry.target}</p>
                             )}
                             {entry.note && (
-                              <p className="text-[#555] text-xs italic mt-0.5">{entry.note}</p>
+                              <p className="text-[#555] text-xs italic mt-0.5">&ldquo;{entry.note}&rdquo;</p>
+                            )}
+                            {entry.pageUrl && (
+                              <p className="text-[#444] text-[10px] font-mono mt-0.5 truncate">{entry.pageUrl}</p>
                             )}
                           </div>
                         )}
@@ -642,32 +696,21 @@ export default function SessionDetailPage() {
           )}
         </TabsContent>
 
-        {/* Screenshots Tab */}
-        <TabsContent value="screenshots">
-          {screenshots.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-[#555]">
-                No screenshots captured. Screenshots are available when using Browserbase sessions.
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {screenshots.map((src, i) => (
-                <Card key={i}>
-                  <CardContent className="pt-4">
-                    <img
-                      src={src}
-                      alt={`Screenshot ${i + 1}`}
-                      className="w-full rounded border border-dashed border-[#333]"
-                    />
-                    <p className="text-xs text-[#555] mt-2 font-mono">
-                      {src.split("/").pop()}
-                    </p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+        {/* Recording Tab */}
+        <TabsContent value="recording">
+          <Card>
+            <CardContent className="pt-6">
+              {hasRecording ? (
+                <SessionRecording sessionId={session.id} />
+              ) : (
+                <div className="py-12 text-center text-[#555]">
+                  {session.status === "running" || session.status === "pending"
+                    ? "Recording will be available when the session completes."
+                    : "No recording available for this session."}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Scores Tab */}

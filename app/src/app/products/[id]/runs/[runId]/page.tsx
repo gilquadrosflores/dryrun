@@ -86,7 +86,7 @@ const GOAL_BADGE_STYLES: Record<string, string> = {
   no: "text-[#EF4444] border-[#EF4444]/30 bg-[#EF4444]/10",
 };
 
-function parseFrictionEvents(raw: string | null | undefined): FrictionEvent[] {
+function parseJsonArray<T>(raw: string | null | undefined): T[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -95,6 +95,9 @@ function parseFrictionEvents(raw: string | null | undefined): FrictionEvent[] {
     return [];
   }
 }
+
+const parseFrictionEvents = (raw: string | null | undefined) =>
+  parseJsonArray<FrictionEvent>(raw);
 
 export default function RunDetailPage() {
   const params = useParams();
@@ -167,11 +170,10 @@ export default function RunDetailPage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(() => {
-      fetchData();
-    }, 5000);
+    if (run?.status === "complete") return;
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
-  }, [fetchData]);
+  }, [fetchData, run?.status]);
 
   const allFrictionEvents: Array<FrictionEvent & { sessionId: string }> = [];
   const sessionFrictionMap: Record<string, FrictionEvent[]> = {};
@@ -564,12 +566,7 @@ export default function RunDetailPage() {
         <h2 className="text-xl font-bold">Sessions</h2>
 
         {sessionList.map((session) => {
-          const rawScreenshots: string[] = session.screenshots
-            ? JSON.parse(session.screenshots)
-            : [];
-          const screenshots = rawScreenshots.map((s: string) =>
-            s.startsWith("http") ? s : `/api/screenshots?key=${encodeURIComponent(s)}`
-          );
+          const rawScreenshots = parseJsonArray<string>(session.screenshots);
           const persona = personaMap[session.personaId];
           const detail = sessionDetails[session.id];
           const events = sessionFrictionMap[session.id] || [];
@@ -678,21 +675,12 @@ export default function RunDetailPage() {
                   </div>
                 )}
 
-                {screenshots.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto mb-4">
-                    {screenshots.slice(0, 4).map((src: string, i: number) => (
-                      <img
-                        key={i}
-                        src={src}
-                        alt={`Screenshot ${i + 1}`}
-                        className="h-32 rounded border border-dashed border-[#333]"
-                      />
-                    ))}
-                    {screenshots.length > 4 && (
-                      <div className="flex items-center text-xs text-[#555]">
-                        +{screenshots.length - 4} more
-                      </div>
-                    )}
+                {/* Recording indicator (replaces old screenshot thumbnails) */}
+                {rawScreenshots.some((s: string) => s.startsWith("r2://recordings/")) && (
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#E8FF00]/10 border border-[#E8FF00]/30 text-[#E8FF00] text-[10px] font-medium">
+                      &#x25B6; Recording available
+                    </span>
                   </div>
                 )}
                 <Link
