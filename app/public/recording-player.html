@@ -1,20 +1,9 @@
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const sessionId = searchParams.get("sessionId");
-
-  if (!sessionId) {
-    return new Response("Missing sessionId", { status: 400 });
-  }
-
-  const shortId = sessionId.slice(0, 8);
-
-  // Data is fetched client-side from /api/recordings to avoid any script injection issues
-  const html = `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Session ${shortId}</title>
+  <title>Session Recording</title>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -239,7 +228,7 @@ export async function GET(req: Request) {
       <div id="overlay" class="o-loading">
         <div class="o-icon">▶</div>
         <div class="o-text">Loading</div>
-        <div class="o-sub">${shortId}</div>
+        <div class="o-sub" id="session-label"></div>
       </div>
     </div>
 
@@ -268,15 +257,22 @@ export async function GET(req: Request) {
   <script src="https://cdn.jsdelivr.net/npm/rrweb@1.1.3/dist/rrweb.min.js"></script>
   <script>
   (function () {
-    var overlay   = document.getElementById('overlay');
-    var controls  = document.getElementById('controls');
-    var progress  = document.getElementById('progress');
-    var pFill     = document.getElementById('progress-fill');
-    var pHandle   = document.getElementById('progress-handle');
-    var btnPlay   = document.getElementById('btn-play');
-    var timeCur   = document.querySelector('#time .t-cur');
-    var timeTot   = document.querySelector('#time .t-tot');
-    var skipWrap  = document.getElementById('skip-wrap');
+    var params    = new URLSearchParams(location.search);
+    var sessionId = params.get('sessionId');
+    var shortId   = sessionId ? sessionId.slice(0, 8) : '?';
+
+    document.title = 'Session ' + shortId;
+    document.getElementById('session-label').textContent = shortId;
+
+    var overlay    = document.getElementById('overlay');
+    var controls   = document.getElementById('controls');
+    var progress   = document.getElementById('progress');
+    var pFill      = document.getElementById('progress-fill');
+    var pHandle    = document.getElementById('progress-handle');
+    var btnPlay    = document.getElementById('btn-play');
+    var timeCur    = document.querySelector('#time .t-cur');
+    var timeTot    = document.querySelector('#time .t-tot');
+    var skipWrap   = document.getElementById('skip-wrap');
     var playerArea = document.getElementById('player-area');
     var root       = document.getElementById('replayer-root');
 
@@ -294,8 +290,12 @@ export async function GET(req: Request) {
         (sub ? '<div class="o-sub">' + sub + '</div>' : '');
     }
 
-    // Fetch recording data from the dedicated JSON endpoint
-    fetch('/api/recordings?sessionId=${sessionId}')
+    if (!sessionId) {
+      showOverlay('o-error', 'Missing sessionId', 'No sessionId in URL');
+      return;
+    }
+
+    fetch('/api/recordings?sessionId=' + sessionId)
       .then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
@@ -328,7 +328,7 @@ export async function GET(req: Request) {
         mouseTail: { duration: 500, strokeStyle: 'rgba(232,255,0,0.4)' }
       });
 
-      var meta = replayer.getMetaData();
+      var meta  = replayer.getMetaData();
       var total = meta.totalTime;
       timeTot.textContent = fmt(total);
 
@@ -342,7 +342,7 @@ export async function GET(req: Request) {
         var iH = parseFloat(iframe.getAttribute('height') || '720') || 720;
         var aW = playerArea.clientWidth;
         var aH = playerArea.clientHeight;
-        var s = Math.min(aW / iW, aH / iH);
+        var s  = Math.min(aW / iW, aH / iH);
         wrapper.style.transform = 'scale(' + s + ')';
         wrapper.style.left = Math.max(0, (aW - iW * s) / 2) + 'px';
         wrapper.style.top  = Math.max(0, (aH - iH * s) / 2) + 'px';
@@ -355,7 +355,6 @@ export async function GET(req: Request) {
         replayer.pause();
         overlay.classList.add('hidden');
         controls.classList.add('show');
-        // Scale after controls are shown so player-area has correct final height
         requestAnimationFrame(scale);
       }, 400);
 
@@ -372,7 +371,7 @@ export async function GET(req: Request) {
       }
 
       function updateUI() {
-        var c = getCur();
+        var c   = getCur();
         var pct = total > 0 ? (c / total * 100) : 0;
         pFill.style.width  = pct + '%';
         pHandle.style.left = pct + '%';
@@ -387,8 +386,8 @@ export async function GET(req: Request) {
 
       function play(fromOffset) {
         if (fromOffset !== undefined) curOffset = fromOffset;
-        startWall  = Date.now();
-        isPlaying  = true;
+        startWall = Date.now();
+        isPlaying = true;
         btnPlay.textContent = '⏸';
         replayer.play(curOffset);
         cancelAnimationFrame(raf);
@@ -434,10 +433,10 @@ export async function GET(req: Request) {
       progress.addEventListener('mousedown', function (e) {
         dragging = true;
         seek(e.clientX);
-        if (!isPlaying) raf = requestAnimationFrame(tick); // ensure RAF runs while paused+dragging
+        if (!isPlaying) raf = requestAnimationFrame(tick);
       });
       document.addEventListener('mousemove', function (e) {
-        if (dragging) pendingSeekX = e.clientX; // batched; drained in tick()
+        if (dragging) pendingSeekX = e.clientX;
       });
       document.addEventListener('mouseup', function () { dragging = false; pendingSeekX = null; });
 
@@ -466,12 +465,4 @@ export async function GET(req: Request) {
   })();
   </script>
 </body>
-</html>`;
-
-  return new Response(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "public, max-age=3600",
-    },
-  });
-}
+</html>

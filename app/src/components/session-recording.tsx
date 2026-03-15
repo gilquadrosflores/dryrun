@@ -34,7 +34,7 @@ export function SessionRecording({ sessionId }: SessionRecordingProps) {
         </div>
       )}
       <iframe
-        src={`/api/recordings/player?sessionId=${sessionId}`}
+        src={`/recording-player.html?sessionId=${sessionId}`}
         className={`w-full bg-[#0a0a0a] rounded-lg ${!isVisible && "h-0 overflow-hidden"}`}
         style={isVisible ? { aspectRatio: "16/10", border: "none", overflow: "hidden" } : { border: "none" }}
         onLoad={() => setIsLoaded(true)}
