@@ -9,6 +9,7 @@ interface Env {
   BROWSER_SESSION_WORKFLOW: Workflow;
   BROWSERBASE_API_KEY: string;
   BROWSERBASE_PROJECT_ID: string;
+  ANTHROPIC_API_KEY: string;
   GEMINI_API_KEY: string;
   EXECUTOR_SECRET: string;
 }
@@ -40,6 +41,21 @@ interface TraceEntry {
   target?: string;
   result?: string;
   note?: string;
+  pageUrl?: string;
+  durationMs?: number;
+}
+
+interface StagehandAction {
+  type: string;
+  reasoning?: string;
+  taskCompleted?: boolean;
+  action?: string;
+  timeMs?: number;
+  pageText?: string;
+  pageUrl?: string;
+  instruction?: string;
+  variant?: string;
+  result?: string;
 }
 
 interface SessionParams {
@@ -57,7 +73,7 @@ interface AgentResult {
   abandonmentPoint: string | null;
   agentNotes: string[];
   durationSeconds: number;
-  screenshots: string[];
+  replayUrl: string;
 }
 
 interface AIScoreResult {
@@ -70,7 +86,7 @@ interface AIScoreResult {
   qualitativeReview: string;
 }
 
-// ── Stagehand HTTP helpers ─────────────────────────────────────
+// ── Constants ──────────────────────────────────────────────────
 
 const STAGEHAND_API_BASE = "https://api.stagehand.browserbase.com/v1";
 
@@ -83,16 +99,46 @@ const ARCHETYPE_OVERRIDES: Record<string, string> = {
   evaluator: "Test edge cases. Look for team/admin features. Check export and reporting flows even if not part of the mission.",
 };
 
+// Map Stagehand tool names → human-readable action names
+const ACTION_TYPE_MAP: Record<string, string> = {
+  goto: "navigate",
+  act: "click",
+  fillForm: "fill_form",
+  fillFormVision: "fill_form",
+  scroll: "scroll",
+  extract: "read_page",
+  keys: "keyboard",
+  navback: "go_back",
+  screenshot: "screenshot",
+  wait: "wait",
+  search: "search",
+  click: "click",
+  type: "type",
+  dragAndDrop: "drag",
+  clickAndHold: "long_press",
+};
+
+// Stagehand internal tools that produce noise — skip in trace
+const SKIP_ACTIONS = new Set(["ariaTree", "think", "screenshot"]);
+
+// ── SSE Stream Parser (for agentExecute only) ─────────────────
+
+/**
+ * Parse SSE stream from Stagehand agentExecute.
+ * Uses a very long per-read timeout (10 min) since agent steps can take
+ * a while between SSE events. The streaming connection is essential to
+ * prevent Cloudflare 524 gateway timeouts on long-running requests.
+ */
 async function parseSSEStream(
   body: ReadableStream<Uint8Array>,
-  timeoutMs?: number
+  totalTimeoutMs: number,
 ): Promise<{ result: unknown; logs: string[] }> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   const logs: string[] = [];
-  // Per-read timeout: if no data arrives within 2 minutes, the stream is dead
-  const readTimeoutMs = Math.min(timeoutMs ?? 120_000, 120_000);
+  // 10 min per-read timeout — agent steps can take 30-60s each
+  const readTimeoutMs = 600_000;
 
   function readWithTimeout(): Promise<ReadableStreamReadResult<Uint8Array>> {
     return Promise.race([
@@ -106,12 +152,12 @@ async function parseSSEStream(
     ]);
   }
 
-  const deadline = timeoutMs ? Date.now() + timeoutMs : null;
+  const deadline = Date.now() + totalTimeoutMs;
 
   while (true) {
-    if (deadline && Date.now() > deadline) {
+    if (Date.now() > deadline) {
       reader.cancel();
-      throw new Error(`SSE stream exceeded total timeout of ${Math.round(timeoutMs! / 1000)}s`);
+      throw new Error(`SSE stream exceeded total timeout of ${Math.round(totalTimeoutMs / 1000)}s`);
     }
     const { value, done } = await readWithTimeout();
     if (done && !buffer) break;
@@ -147,33 +193,138 @@ async function parseSSEStream(
   return { result: null, logs };
 }
 
+// ── Stagehand API helpers ──────────────────────────────────────
+
+/**
+ * Call a Stagehand endpoint with non-streaming JSON response.
+ * Used for quick operations: navigate, act, session start/end.
+ */
+async function stagehandFetch(
+  url: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+  timeoutMs: number = 60_000,
+): Promise<unknown> {
+  const nonStreamHeaders = {
+    ...headers,
+    "x-stream-response": "false",
+  };
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: nonStreamHeaders,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Stagehand API error ${resp.status}: ${errText.slice(0, 300)}`);
+  }
+
+  const data = await resp.json() as { success?: boolean; data?: unknown; message?: string };
+  if (data.success === false) {
+    throw new Error(`Stagehand rejected: ${data.message || JSON.stringify(data).slice(0, 200)}`);
+  }
+
+  return data.data ?? data;
+}
+
+// ── Trace Transformation ───────────────────────────────────────
+
+function transformActionsToTrace(actions: StagehandAction[], baseTimestamp: number): TraceEntry[] {
+  const trace: TraceEntry[] = [];
+  let cumulativeMs = 0;
+
+  for (const action of actions) {
+    if (SKIP_ACTIONS.has(action.type)) continue;
+
+    const humanAction = ACTION_TYPE_MAP[action.type] || action.type;
+    const timeMs = action.timeMs || 0;
+    cumulativeMs += timeMs;
+    const timestamp = baseTimestamp + cumulativeMs;
+
+    // Build a human-readable target description
+    let target: string | undefined;
+    if (action.action) {
+      target = action.action;
+    } else if (action.instruction) {
+      target = action.instruction;
+    }
+
+    const entry: TraceEntry = {
+      timestamp,
+      action: humanAction,
+      target,
+      result: action.taskCompleted ? "task_completed" : (action.result || undefined),
+      note: action.reasoning || undefined,
+      pageUrl: action.pageUrl || undefined,
+      durationMs: timeMs || undefined,
+    };
+
+    trace.push(entry);
+  }
+
+  return trace;
+}
+
 // ── Rule-based metrics ─────────────────────────────────────────
 
 function computeRuleBasedMetrics(trace: TraceEntry[]) {
   if (trace.length === 0) {
     return { timeToFirstActionSeconds: null, deadEndCount: 0, recoveryCount: 0, helpSeekingEvents: 0, confidenceDrops: 0, totalSteps: 0, durationSeconds: null };
   }
+
   const startTime = trace[0].timestamp;
   const endTime = trace[trace.length - 1].timestamp;
-  const firstAction = trace.find(t => t.action !== "navigate" && t.action !== "wait" && t.action !== "observe");
+
+  const passiveActions = new Set(["navigate", "wait", "read_page", "observe", "session_started", "agent_start", "screenshot"]);
+  const firstAction = trace.find(t => !passiveActions.has(t.action));
   const timeToFirstAction = firstAction ? Math.round((firstAction.timestamp - startTime) / 1000) : null;
-  const deadEnds = trace.filter(t => t.result?.includes("not found") || t.result?.includes("error") || t.result?.includes("failed") || t.result?.includes("stuck") || t.result?.includes("dead end")).length;
+
+  const failureTerms = ["not found", "error", "failed", "stuck", "dead end", "unable", "cannot", "doesn't exist"];
+  const deadEnds = trace.filter(t => {
+    const text = `${t.result || ""} ${t.note || ""}`.toLowerCase();
+    return failureTerms.some(term => text.includes(term));
+  }).length;
+
   let recoveries = 0;
   for (let i = 1; i < trace.length; i++) {
-    const prev = trace[i - 1];
-    const curr = trace[i];
-    if ((prev.result?.includes("error") || prev.result?.includes("failed")) && curr.result && !curr.result.includes("error") && !curr.result.includes("failed")) recoveries++;
+    const prevText = `${trace[i - 1].result || ""} ${trace[i - 1].note || ""}`.toLowerCase();
+    const currText = `${trace[i].result || ""} ${trace[i].note || ""}`.toLowerCase();
+    const prevFailed = failureTerms.some(term => prevText.includes(term));
+    const currOk = !failureTerms.some(term => currText.includes(term));
+    if (prevFailed && currOk && trace[i].action !== "screenshot") recoveries++;
   }
-  const helpSeeking = trace.filter(t => t.action?.includes("help") || t.action?.includes("tooltip") || t.action?.includes("docs") || t.note?.includes("looking for help") || t.note?.includes("confused")).length;
-  const confidenceDrops = trace.filter(t => t.note?.includes("frustrated") || t.note?.includes("uncertain") || t.note?.includes("confused") || t.note?.includes("unsure") || t.note?.includes("giving up")).length;
-  return { timeToFirstActionSeconds: timeToFirstAction, deadEndCount: deadEnds, recoveryCount: recoveries, helpSeekingEvents: helpSeeking, confidenceDrops, totalSteps: trace.length, durationSeconds: Math.round((endTime - startTime) / 1000) };
+
+  const helpTerms = ["help", "tooltip", "docs", "documentation", "faq", "support", "confused", "looking for help"];
+  const helpSeeking = trace.filter(t => {
+    const text = `${t.action} ${t.target || ""} ${t.note || ""}`.toLowerCase();
+    return helpTerms.some(term => text.includes(term));
+  }).length;
+
+  const uncertainTerms = ["frustrated", "uncertain", "confused", "unsure", "giving up", "abandon", "stuck", "doesn't make sense"];
+  const confidenceDrops = trace.filter(t => {
+    const text = `${t.note || ""} ${t.result || ""}`.toLowerCase();
+    return uncertainTerms.some(term => text.includes(term));
+  }).length;
+
+  return {
+    timeToFirstActionSeconds: timeToFirstAction,
+    deadEndCount: deadEnds,
+    recoveryCount: recoveries,
+    helpSeekingEvents: helpSeeking,
+    confidenceDrops,
+    totalSteps: trace.length,
+    durationSeconds: Math.round((endTime - startTime) / 1000),
+  };
 }
 
 // ── Gemini AI helpers ──────────────────────────────────────────
 
 async function geminiJSON<T>(apiKey: string, systemPrompt: string, userPrompt: string): Promise<T> {
   const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -202,7 +353,7 @@ async function geminiJSON<T>(apiKey: string, systemPrompt: string, userPrompt: s
 
 async function geminiText(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -225,6 +376,7 @@ export class BrowserSessionWorkflow extends WorkflowEntrypoint<Env, SessionParam
     const { sessionId, runId, persona, plan, maxSteps, hardTimeoutSeconds } = event.payload;
     const bbApiKey = this.env.BROWSERBASE_API_KEY;
     const bbProjectId = this.env.BROWSERBASE_PROJECT_ID;
+    const anthropicApiKey = this.env.ANTHROPIC_API_KEY;
     const geminiApiKey = this.env.GEMINI_API_KEY;
 
     // Mark session as running
@@ -234,7 +386,7 @@ export class BrowserSessionWorkflow extends WorkflowEntrypoint<Env, SessionParam
 
     // Step 1: Start Stagehand session
     const stagehandSession = await step.do("start-stagehand-session", {
-      retries: { limit: 10, delay: "30 seconds", backoff: "exponential" },
+      retries: { limit: 5, delay: "10 seconds", backoff: "exponential" },
     }, async () => {
       const archetypeOverride = ARCHETYPE_OVERRIDES[persona.archetype] || "";
       const systemPrompt = `You are ${persona.name}. You are not a software tester — you are a real person trying to complete a task.
@@ -255,10 +407,8 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
       const headers: Record<string, string> = {
         "x-bb-api-key": bbApiKey,
         "x-bb-project-id": bbProjectId,
-        "x-stream-response": "true",
-        "x-model-api-key": geminiApiKey,
-        "x-language": "typescript",
-        "x-sdk-version": "3.1.0",
+        "x-stream-response": "false",
+        "x-model-api-key": anthropicApiKey,
         "Content-Type": "application/json",
       };
 
@@ -267,10 +417,11 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
         headers,
         body: JSON.stringify({
           projectId: bbProjectId,
-          modelName: "google/gemini-3-flash-preview",
+          modelName: "anthropic/claude-haiku-4-5",
           systemPrompt,
           browserbaseSessionCreateParams: { projectId: bbProjectId },
         }),
+        signal: AbortSignal.timeout(60_000),
       });
 
       if (!resp.ok) {
@@ -278,7 +429,11 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
         throw new Error(`Session start failed ${resp.status}: ${errText.slice(0, 200)}`);
       }
 
-      const initData = await resp.json() as { success: boolean; data: { sessionId: string; available: boolean }; message?: string };
+      const initData = await resp.json() as {
+        success: boolean;
+        data: { sessionId: string; cdpUrl?: string | null; available: boolean };
+        message?: string;
+      };
       if (!initData.success || !initData.data?.sessionId) {
         throw new Error(`Session start rejected: ${initData.message || "no sessionId"}`);
       }
@@ -293,10 +448,8 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
       "x-bb-api-key": bbApiKey,
       "x-bb-project-id": bbProjectId,
       "x-bb-session-id": bbSessionId,
-      "x-stream-response": "true",
-      "x-model-api-key": geminiApiKey,
-      "x-language": "typescript",
-      "x-sdk-version": "3.1.0",
+      "x-stream-response": "false",
+      "x-model-api-key": anthropicApiKey,
       "Content-Type": "application/json",
     });
 
@@ -310,111 +463,31 @@ ${archetypeOverride ? `\nPersona behavior: ${archetypeOverride}` : ""}`;
       }
       console.log(`[workflow] Navigating to: ${startUrl}`);
 
-      const resp = await fetch(`${STAGEHAND_API_BASE}/sessions/${bbSessionId}/navigate`, {
-        method: "POST",
-        headers: makeHeaders(),
-        body: JSON.stringify({ url: startUrl }),
-        signal: AbortSignal.timeout(30000),
-      });
-
-      if (!resp.ok) throw new Error(`Navigate failed: ${resp.status}`);
-      await parseSSEStream(resp.body!, 30000);
+      await stagehandFetch(
+        `${STAGEHAND_API_BASE}/sessions/${bbSessionId}/navigate`,
+        makeHeaders(),
+        { url: startUrl },
+        30_000,
+      );
     });
 
-    // Helper: capture screenshot via Stagehand API and upload to R2
-    // Wraps the entire operation in a hard timeout to prevent hanging
-    const captureScreenshot = async (label: string, index: number): Promise<string | null> => {
-      const SCREENSHOT_TIMEOUT = 20_000;
-      try {
-        return await Promise.race([
-          (async (): Promise<string | null> => {
-            const controller = new AbortController();
-            const resp = await fetch(`${STAGEHAND_API_BASE}/sessions/${bbSessionId}/screenshot`, {
-              method: "POST",
-              headers: makeHeaders(),
-              signal: controller.signal,
-            });
-            console.log(`[workflow] Screenshot ${label}: status=${resp.status} ct=${resp.headers.get("content-type")}`);
-            if (!resp.ok) return null;
-
-            // Read entire response body as text (don't use SSE parsing — avoid hangs)
-            const bodyText = await resp.text();
-            console.log(`[workflow] Screenshot ${label}: body length=${bodyText.length}, preview=${bodyText.slice(0, 200)}`);
-
-            // Try to extract base64 from any format
-            let base64: string | null = null;
-
-            // If body IS the base64 (raw data)
-            if (bodyText.startsWith("data:image/") || bodyText.match(/^[A-Za-z0-9+/=]{100,}/)) {
-              base64 = bodyText;
-            } else {
-              // Try parsing SSE events for the result
-              const events = bodyText.split("\n\n").filter(p => p.startsWith("data: "));
-              for (const evt of events) {
-                try {
-                  const parsed = JSON.parse(evt.slice(6));
-                  if (parsed.type === "system" && parsed.data?.status === "finished") {
-                    const result = parsed.data.result;
-                    if (typeof result === "string") base64 = result;
-                    else if (result?.screenshot) base64 = result.screenshot;
-                    else if (result?.data) base64 = result.data;
-                    else console.log(`[workflow] Screenshot ${label}: result keys=${Object.keys(result || {}).join(",")}`);
-                    break;
-                  }
-                } catch { /* skip non-JSON lines */ }
-              }
-              // Try as plain JSON
-              if (!base64) {
-                try {
-                  const json = JSON.parse(bodyText) as Record<string, unknown>;
-                  base64 = (json.screenshot || json.data || json.image) as string | null;
-                } catch { /* not JSON */ }
-              }
-            }
-
-            if (!base64) {
-              console.log(`[workflow] Screenshot ${label}: could not extract image data`);
-              return null;
-            }
-
-            const raw = String(base64).replace(/^data:image\/\w+;base64,/, "");
-            const bytes = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
-            const key = `runs/${runId}/sessions/${sessionId}/${String(index).padStart(2, "0")}-${label}.png`;
-            await this.env.SCREENSHOTS.put(key, bytes, { httpMetadata: { contentType: "image/png" } });
-            console.log(`[workflow] Screenshot uploaded: ${key} (${bytes.length} bytes)`);
-            return key;
-          })(),
-          new Promise<null>((resolve) => {
-            setTimeout(() => {
-              console.log(`[workflow] Screenshot ${label}: hard timeout after ${SCREENSHOT_TIMEOUT / 1000}s`);
-              resolve(null);
-            }, SCREENSHOT_TIMEOUT);
-          }),
-        ]);
-      } catch (error) {
-        console.log(`[workflow] Screenshot ${label} error:`, error instanceof Error ? error.message : error);
-        return null;
-      }
-    };
-
-    // Step 3: Execute the agent — this is the long-running step (mostly I/O wait)
-    // Timeout after hardTimeoutSeconds to prevent hanging indefinitely
+    // Step 3: Execute the agent
     const agentResult = await step.do("execute-agent", async () => {
       const startTime = Date.now();
       const trace: TraceEntry[] = [];
       const agentNotes: string[] = [];
-      const screenshots: string[] = [];
       let goalAchieved: "yes" | "partial" | "no" = "no";
       let abandonmentPoint: string | null = null;
 
-      trace.push({ timestamp: Date.now(), action: "session_started", result: bbSessionId, note: "Stagehand API session" });
-      trace.push({ timestamp: Date.now(), action: "navigate", target: plan.entryPoint, result: "navigated" });
+      // Store Browserbase session reference and replay URL
+      const replayUrl = `https://www.browserbase.com/sessions/${bbSessionId}`;
+      agentNotes.push(`Browserbase session: ${bbSessionId}`);
+      agentNotes.push(`Recording: ${replayUrl}`);
 
-      // Screenshot 1: initial page after navigation
-      const startScreenshot = await captureScreenshot("start", 1);
-      if (startScreenshot) screenshots.push(startScreenshot);
+      trace.push({ timestamp: Date.now(), action: "session_started", result: bbSessionId });
+      trace.push({ timestamp: Date.now(), action: "navigate", target: plan.entryPoint, result: "navigated", pageUrl: plan.entryPoint });
 
-      trace.push({ timestamp: Date.now(), action: "agent_start", result: "running", note: plan.missionDescription });
+      trace.push({ timestamp: Date.now(), action: "agent_start", note: plan.missionDescription });
 
       try {
         const instruction = `Complete this mission as ${persona.name}: ${plan.missionDescription}
@@ -425,18 +498,27 @@ ${plan.steps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}
 Stop when the goal is achieved or you determine it cannot be completed. Describe what you accomplished.`;
 
         const timeoutMs = hardTimeoutSeconds * 1000;
+
+        // Use SSE streaming for agentExecute — essential to keep connection alive
+        // and prevent Cloudflare 524 gateway timeouts on long-running agent sessions.
+        console.log(`[workflow] Starting agentExecute (streaming, timeout: ${hardTimeoutSeconds}s, maxSteps: ${maxSteps})`);
+
+        const streamHeaders = {
+          ...makeHeaders(),
+          "x-stream-response": "true",
+        };
+
         const resp = await fetch(`${STAGEHAND_API_BASE}/sessions/${bbSessionId}/agentExecute`, {
           method: "POST",
-          headers: makeHeaders(),
+          headers: streamHeaders,
           body: JSON.stringify({
             agentConfig: {
-              provider: "google",
-              modelName: "gemini-3-flash-preview",
-              apiKey: geminiApiKey,
+              model: "anthropic/claude-haiku-4-5",
+              mode: "dom",
             },
             executeOptions: {
               instruction,
-              maxSteps: maxSteps,
+              maxSteps,
             },
           }),
           signal: AbortSignal.timeout(timeoutMs),
@@ -447,36 +529,54 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
           throw new Error(`agentExecute failed ${resp.status}: ${errText.slice(0, 300)}`);
         }
 
-        const { result, logs } = await parseSSEStream(resp.body!, hardTimeoutSeconds * 1000);
+        const { result: sseResult, logs } = await parseSSEStream(resp.body!, timeoutMs);
 
-        for (const log of logs.slice(0, 30)) {
-          trace.push({ timestamp: Date.now(), action: "agent_log", result: log.slice(0, 200) });
+        console.log(`[workflow] agentExecute completed — ${logs.length} log events received`);
+
+        // The SSE finished event contains the result
+        const result = sseResult as Record<string, unknown> | null;
+
+        // The result structure can be nested: result.{actions,message,...}
+        const actions = result?.actions as StagehandAction[] | undefined;
+        const success = result?.success ?? result?.completed;
+        const message = (result?.message || result?.output) as string | undefined;
+
+        // Transform structured actions into human-readable trace
+        if (actions && Array.isArray(actions) && actions.length > 0) {
+          const actionTrace = transformActionsToTrace(actions, startTime);
+          trace.push(...actionTrace);
+          console.log(`[workflow] Parsed ${actionTrace.length} actions from agent result`);
+        } else {
+          console.log("[workflow] No structured actions in result");
+          // Log the raw result shape for debugging
+          agentNotes.push(`Raw result keys: ${result ? Object.keys(result).join(", ") : "null"}`);
         }
-        agentNotes.push(...logs.filter((l: string) => l.length > 10).slice(-5));
 
-        const resultObj = result as { success?: boolean; completed?: boolean; output?: string; message?: string } | null;
-        if (resultObj?.success || resultObj?.completed) {
+        // Store raw SSE logs as debug notes
+        const debugLogs = logs.filter((l: string) => l.length > 10).slice(-10);
+        agentNotes.push(...debugLogs);
+
+        // Determine goal achievement
+        if (success) {
           goalAchieved = "yes";
-        } else if (logs.length > 3) {
+        } else if (actions && actions.some((a: StagehandAction) => a.taskCompleted)) {
+          goalAchieved = "yes";
+        } else if (trace.length > 5) {
           goalAchieved = "partial";
         }
 
-        const summary = resultObj?.output || resultObj?.message || logs.slice(-2).join("; ");
-        if (summary) agentNotes.push(`Agent result: ${String(summary).slice(0, 500)}`);
-        trace.push({ timestamp: Date.now(), action: "agent_complete", result: goalAchieved, note: String(summary || "").slice(0, 200) });
-
-        // Screenshot 2: final state after agent execution
-        const endScreenshot = await captureScreenshot("end", 2);
-        if (endScreenshot) screenshots.push(endScreenshot);
+        if (message) agentNotes.push(`Agent result: ${String(message).slice(0, 500)}`);
+        trace.push({
+          timestamp: Date.now(),
+          action: "agent_complete",
+          result: goalAchieved,
+          note: String(message || "").slice(0, 200),
+        });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         trace.push({ timestamp: Date.now(), action: "fatal_error", result: errorMsg, note: "Session crashed" });
         agentNotes.push(`Fatal error: ${errorMsg}`);
         abandonmentPoint = errorMsg.slice(0, 200);
-
-        // Screenshot on error: capture the error state
-        const errorScreenshot = await captureScreenshot("error", 2);
-        if (errorScreenshot) screenshots.push(errorScreenshot);
       }
 
       return {
@@ -484,7 +584,7 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         goalAchieved,
         abandonmentPoint,
         agentNotes,
-        screenshots,
+        replayUrl,
         durationSeconds: Math.round((Date.now() - startTime) / 1000),
       } satisfies AgentResult;
     });
@@ -502,10 +602,54 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
       }
     });
 
-    // Step 5: Update D1 session with results
+    // Step 5: Download session recording from Browserbase and store in R2
+    const recordingKey = await step.do("download-recording", {
+      retries: { limit: 3, delay: "5 seconds", backoff: "exponential" },
+    }, async () => {
+      try {
+        // Browserbase recording API returns rrweb event data
+        const resp = await fetch(`https://api.browserbase.com/v1/sessions/${bbSessionId}/recording`, {
+          headers: {
+            "x-bb-api-key": bbApiKey,
+          },
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!resp.ok) {
+          console.log(`[workflow] Recording download failed: ${resp.status}`);
+          return null;
+        }
+
+        const recordingData = await resp.text();
+        if (!recordingData || recordingData.length < 100) {
+          console.log("[workflow] Recording data empty or too small");
+          return null;
+        }
+
+        // Store in R2 — key format: recordings/{sessionId}.json
+        const key = `recordings/${sessionId}.json`;
+        await this.env.SCREENSHOTS.put(key, recordingData, {
+          httpMetadata: { contentType: "application/json" },
+        });
+
+        console.log(`[workflow] Recording stored in R2: ${key} (${Math.round(recordingData.length / 1024)}KB)`);
+        return key;
+      } catch (error) {
+        console.error("[workflow] Recording download error:", error);
+        return null;
+      }
+    });
+
+    // Step 6: Update D1 session with results
     await step.do("update-session", async () => {
       const now = Math.floor(Date.now() / 1000);
       const status = agentResult.goalAchieved === "no" && agentResult.abandonmentPoint ? "abandoned" : "complete";
+
+      // Store recording reference: R2 key if we have it, fallback to replay URL
+      const screenshotsData: string[] = [];
+      if (recordingKey) screenshotsData.push(`r2://${recordingKey}`);
+      screenshotsData.push(agentResult.replayUrl);
+
       await this.env.DB.prepare(
         "UPDATE sessions SET status = ?, goal_achieved = ?, abandonment_point = ?, duration_seconds = ?, trace = ?, screenshots = ?, agent_notes = ?, completed_at = ? WHERE id = ?"
       ).bind(
@@ -514,14 +658,14 @@ Stop when the goal is achieved or you determine it cannot be completed. Describe
         agentResult.abandonmentPoint,
         agentResult.durationSeconds,
         JSON.stringify(agentResult.trace),
-        JSON.stringify(agentResult.screenshots),
+        JSON.stringify(screenshotsData),
         JSON.stringify(agentResult.agentNotes),
         now,
         sessionId,
       ).run();
     });
 
-    // Step 6: AI scoring
+    // Step 7: AI scoring
     const aiScore = await step.do("ai-scoring", {
       retries: { limit: 2, delay: "5 seconds", backoff: "linear" },
     }, async () => {
@@ -547,7 +691,15 @@ User State: ${plan.teacherState}
 Goal Achieved: ${agentResult.goalAchieved}
 
 Action Trace (${agentResult.trace.length} steps):
-${agentResult.trace.map((t: TraceEntry, i: number) => `[${i + 1}] ${t.action}${t.target ? ` → ${t.target}` : ""}${t.result ? ` (${t.result})` : ""}${t.note ? ` // ${t.note}` : ""}`).join("\n")}
+${agentResult.trace.map((t: TraceEntry, i: number) => {
+  const parts = [`[${i + 1}] ${t.action}`];
+  if (t.target) parts.push(`"${t.target.slice(0, 120)}"`);
+  if (t.pageUrl) parts.push(`@ ${t.pageUrl.slice(0, 80)}`);
+  if (t.result && t.result.length < 100) parts.push(`(${t.result})`);
+  if (t.note) parts.push(`// ${t.note.slice(0, 150)}`);
+  if (t.durationMs) parts.push(`[${t.durationMs}ms]`);
+  return parts.join(" ");
+}).join("\n")}
 
 Return JSON:
 {
@@ -562,12 +714,19 @@ Return JSON:
 
         return await geminiJSON<AIScoreResult>(geminiApiKey, systemPrompt, userPrompt);
       } catch (error) {
-        console.error("[workflow] AI scoring failed:", error);
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error("[workflow] AI scoring failed:", msg);
+        // Store error in D1 so it's visible in the UI
+        try {
+          await this.env.DB.prepare(
+            "UPDATE sessions SET agent_notes = json_insert(agent_notes, '$[#]', ?) WHERE id = ?"
+          ).bind(`AI scoring error: ${msg.slice(0, 300)}`, sessionId).run();
+        } catch { /* ignore */ }
         return null;
       }
     });
 
-    // Step 7: Insert score + generate report
+    // Step 8: Insert score + generate report
     await step.do("insert-score-and-report", {
       retries: { limit: 2, delay: "3 seconds", backoff: "linear" },
     }, async () => {
@@ -591,7 +750,6 @@ Return JSON:
         now,
       ).run();
 
-      // Generate report if scoring succeeded
       if (aiScore) {
         try {
           const systemPrompt = `You are a UX report writer producing friction reports for product managers and designers. Write in clear, direct prose. Use markdown formatting. Be specific and actionable.`;
@@ -643,7 +801,7 @@ Write a friction report with these sections:
       }
     });
 
-    // Step 8: Check if all sessions in the run are done
+    // Step 9: Check if all sessions in the run are done
     await step.do("check-run-complete", async () => {
       const result = await this.env.DB.prepare(
         "SELECT COUNT(*) as total, SUM(CASE WHEN status IN ('complete', 'abandoned', 'failed') THEN 1 ELSE 0 END) as done FROM sessions WHERE run_id = ?"
@@ -662,18 +820,16 @@ Write a friction report with these sections:
   }
 }
 
-// ── Fetch handler (trigger endpoint) ───────────────────────────
+// ── Fetch handler ──────────────────────────────────────────────
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // Health check
     if (url.pathname === "/health") {
       return new Response("ok");
     }
 
-    // Trigger a session workflow
     if (url.pathname === "/execute" && request.method === "POST") {
       const secret = request.headers.get("x-executor-secret");
       if (secret !== env.EXECUTOR_SECRET) {
@@ -693,7 +849,6 @@ export default {
       return Response.json({ accepted: true, instanceId: instance.id, sessionId: body.sessionId });
     }
 
-    // Get workflow instance status
     if (url.pathname.startsWith("/status/") && request.method === "GET") {
       const instanceId = url.pathname.slice("/status/".length);
       try {

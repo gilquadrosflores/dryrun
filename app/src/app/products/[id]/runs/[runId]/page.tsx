@@ -567,9 +567,6 @@ export default function RunDetailPage() {
           const rawScreenshots: string[] = session.screenshots
             ? JSON.parse(session.screenshots)
             : [];
-          const screenshots = rawScreenshots.map((s: string) =>
-            s.startsWith("http") ? s : `/api/screenshots?key=${encodeURIComponent(s)}`
-          );
           const persona = personaMap[session.personaId];
           const detail = sessionDetails[session.id];
           const events = sessionFrictionMap[session.id] || [];
@@ -678,21 +675,12 @@ export default function RunDetailPage() {
                   </div>
                 )}
 
-                {screenshots.length > 0 && (
-                  <div className="flex gap-2 overflow-x-auto mb-4">
-                    {screenshots.slice(0, 4).map((src: string, i: number) => (
-                      <img
-                        key={i}
-                        src={src}
-                        alt={`Screenshot ${i + 1}`}
-                        className="h-32 rounded border border-dashed border-[#333]"
-                      />
-                    ))}
-                    {screenshots.length > 4 && (
-                      <div className="flex items-center text-xs text-[#555]">
-                        +{screenshots.length - 4} more
-                      </div>
-                    )}
+                {/* Recording indicator (replaces old screenshot thumbnails) */}
+                {rawScreenshots.some((s: string) => s.startsWith("r2://recordings/")) && (
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#E8FF00]/10 border border-[#E8FF00]/30 text-[#E8FF00] text-[10px] font-medium">
+                      &#x25B6; Recording available
+                    </span>
                   </div>
                 )}
                 <Link
